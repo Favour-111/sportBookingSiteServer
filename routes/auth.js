@@ -3,18 +3,21 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const router = express.Router();
-
+const nodemailer = require("nodemailer");
+const crypto = require("crypto");
+const Token = require("../models/Token");
+const axios = require("axios");
 router.get("/", async (req, res) => {
-  res.send({
-    msg: "connectted",
-  });
+  res.send({ msg: "connected" });
 });
+
+// =============== SIGNUP ===============
 router.post("/signup", async (req, res) => {
   const { userName, email, password } = req.body;
   try {
     const existingUser = await User.findOne({ email });
     if (existingUser)
-      return res.status(400).json({ message: "User already exists ,Login" });
+      return res.status(400).json({ message: "User already exists, Login" });
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const newUser = new User({ email, password: hashedPassword, userName });
@@ -25,6 +28,7 @@ router.post("/signup", async (req, res) => {
   }
 });
 
+// =============== LOGIN ===============
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -43,14 +47,13 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// =============== DEPOSIT ===============
 router.post("/deposit", async (req, res) => {
   const { userId, amount } = req.body;
-
   try {
     const user = await User.findById(userId);
     if (!user) return res.status(400).json({ message: "User not found" });
 
-    // Update available balance
     user.availableBalance += parseFloat(amount);
     await user.save();
 
@@ -63,30 +66,24 @@ router.post("/deposit", async (req, res) => {
     res.status(500).json({ message: "Error processing deposit" });
   }
 });
+
+// =============== GET ALL USERS ===============
 router.get("/getUsers", async (req, res) => {
-  const users = await User.find();
-  if (users) {
-    res.send({
-      users,
-    });
-  } else {
-    res.send({
-      success: "false",
-      msg: "error fetching users",
-    });
+  try {
+    const users = await User.find();
+    res.send({ users });
+  } catch (error) {
+    res.send({ success: false, msg: "error fetching users" });
   }
 });
+
+// =============== DELETE USER ===============
 router.delete("/deleteUser/:id", async (req, res) => {
-  const { id } = req.params; // Get the user ID from the route parameter
-
+  const { id } = req.params;
   try {
-    // Find and delete the user by ID
     const deletedUser = await User.findByIdAndDelete(id);
-
-    if (!deletedUser) {
+    if (!deletedUser)
       return res.status(404).json({ message: "User not found" });
-    }
-
     res.status(200).json({ message: "User deleted successfully", deletedUser });
   } catch (error) {
     console.error("Error deleting user:", error);
@@ -94,6 +91,163 @@ router.delete("/deleteUser/:id", async (req, res) => {
   }
 });
 
-// Add Telegram login route here if needed
+// =============== FORGOT PASSWORD ===============
+router.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, msg: "User doesn't exist" });
+    }
+
+    // Delete any existing token for this user
+    await Token.findOneAndDelete({ userid: user._id });
+
+    // Generate new token
+    const resetToken = crypto.randomBytes(32).toString("hex");
+    const tokenDoc = await new Token({
+      userid: user._id,
+      token: resetToken,
+    }).save();
+
+    // Construct reset link
+    const resetLink = `${process.env.URL}/${user._id}/${resetToken}`;
+
+    // Nodemailer setup
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER, // Use your email
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    // Send email
+    const mailOptions = {
+      from: "no-reply@sportstips.com", // Use a 'no-reply' address
+      to: email,
+      subject: "Password Reset - SportsTips",
+      html: `
+    <div style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 20px; max-width: 600px; margin: 0 auto; border-radius: 8px;">
+      <h1 style="text-align: center; color: #4b6cb7;">Reset Your Password</h1>
+      <p style="font-size: 16px; color: #555;">Hi ${user.userName},</p>
+      <p style="font-size: 16px; color: #555;">Tap the button below to reset your customer account password. If you didn't request a new password, you can safely delete this email.</p>
+      <div style="text-align: center; margin-top: 30px;">
+        <a href="${process.env.API}/api/auth/reset-password/${user._id}/${resetToken}" style="background-color: #4b6cb7; color: #ffffff; padding: 14px 25px; text-decoration: none; font-size: 16px; border-radius: 5px; display: inline-block;">Reset Password</a>
+      </div>
+      <p style="font-size: 14px; color: #555; margin-top: 20px; text-align: center;">If the button doesn't work, copy and paste the following link into your browser:</p>
+      <p style="font-size: 14px; color: #4b6cb7; text-align: center;">
+        <a href="${process.env.API}/api/auth/reset-password/${user._id}/${resetToken}" style="color: #4b6cb7;">${process.env.API}/api/auth/reset-password/${user._id}/${resetToken}</a>
+      </p>
+      <p style="font-size: 14px; color: #555; text-align: center; margin-top: 40px;">Thank you,</p>
+      <p style="font-size: 14px; color: #555; text-align: center;">The SportsTips Team</p>
+    </div>
+  `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ success: true, msg: "Reset link sent to your email" });
+  } catch (error) {
+    console.error("Error processing password reset:", error);
+    res.status(500).json({ success: false, msg: "Server error" });
+  }
+});
+
+// ===== RESET PASSWORD =====
+router.post("/reset-password/:id/:token", async (req, res) => {
+  const { id, token } = req.params;
+  const { password } = req.body;
+
+  try {
+    const tokenDoc = await Token.findOne({ userid: id, token });
+    if (!tokenDoc) {
+      return res
+        .status(400)
+        .json({ success: false, msg: "Invalid or expired token" });
+    }
+
+    const user = await User.findById(id);
+    if (!user) {
+      return res.status(404).json({ success: false, msg: "User not found" });
+    }
+
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(password, salt);
+    await user.save();
+
+    // Delete used token
+    await Token.findByIdAndDelete(tokenDoc._id);
+
+    res.json({ success: true, msg: "Password reset successfully" });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({ success: false, msg: "Server error" });
+  }
+});
+
+//ox payment
+
+router.post("/create-oxpay", async (req, res) => {
+  try {
+    const { amount, userId } = req.body;
+
+    // Example: call OxPay API (replace with real credentials)
+    const response = await axios.post("https://api.oxpay.com/v1/payment", {
+      amount,
+      currency: "USD",
+      description: `Deposit for user ${userId}`,
+      callback_url: "https://your-backend.com/api/payment/oxpay-callback",
+    });
+
+    const payment = await PaymentModel.create({
+      userId,
+      paymentId: response.data.payment_id,
+      amount,
+      status: "pending",
+    });
+
+    res.json({
+      paymentUrl: response.data.payment_url,
+      paymentId: payment.paymentId,
+    });
+  } catch (error) {
+    console.error("OxPay error:", error);
+    res.status(500).json({ message: "Failed to create payment." });
+  }
+});
+
+// Webhook (OxPay callback)
+router.post("/oxpay-callback", async (req, res) => {
+  try {
+    const { payment_id, status } = req.body;
+
+    if (status === "success") {
+      const payment = await PaymentModel.findOneAndUpdate(
+        { paymentId: payment_id },
+        { status: "success" },
+        { new: true }
+      );
+
+      // Update user balance here (optional)
+      // await UserModel.findByIdAndUpdate(payment.userId, { $inc: { balance: payment.amount } });
+
+      res.json({ success: true });
+    } else {
+      res.json({ success: false });
+    }
+  } catch (error) {
+    console.error("Callback error:", error);
+    res.status(500).json({ success: false });
+  }
+});
+
+// Check payment status
+router.get("/status/:id", async (req, res) => {
+  const payment = await PaymentModel.findOne({ paymentId: req.params.id });
+  res.json({ success: payment?.status === "success" });
+});
 
 module.exports = router;
