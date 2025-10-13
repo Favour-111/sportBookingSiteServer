@@ -14,6 +14,7 @@ const UserSchema = new mongoose.Schema({
   ],
   totalMoneySpent: { type: Number, default: 0 },
   totalBetsBought: { type: Number, default: 0 },
+  active: { type: Boolean, default: true },
 });
 
 module.exports = mongoose.model("User", UserSchema);
