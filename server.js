@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const authRoutes = require("./routes/auth");
 const gameRoutes = require("./routes/game");
+const messageRoutes = require("./routes/message");
 const paymentRoutes = require("./routes/payment");
 const dotenv = require("dotenv");
 dotenv.config();
@@ -14,6 +15,7 @@ app.use(cors());
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/games", gameRoutes);
+app.use("/api/message", messageRoutes);
 app.use("/api/payments", paymentRoutes);
 
 // MongoDB connection
