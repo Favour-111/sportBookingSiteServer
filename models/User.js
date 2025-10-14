@@ -5,13 +5,16 @@ const UserSchema = new mongoose.Schema({
   email: { type: String, required: true },
   password: { type: String, required: true },
   availableBalance: { type: Number, default: 0 },
+
   betHistory: [
     {
-      gameId: { type: mongoose.Schema.Types.ObjectId, ref: "Game" },
-      betAmount: Number,
-      result: String, // 'win' or 'loss'
+      gameContent: String,
+      gameName: String,
+      gameDate: Date,
+      tipPrice: Number,
     },
   ],
+
   totalMoneySpent: { type: Number, default: 0 },
   totalBetsBought: { type: Number, default: 0 },
   active: { type: Boolean, default: true },
