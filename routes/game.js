@@ -129,6 +129,45 @@ router.put("/:id/toggle-active", async (req, res) => {
     res.status(500).json({ message: "Error toggling game status" });
   }
 });
+//for purchased
+router.put("/:id/buy", async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body; // Get userId from the request body
+
+  console.log("Request Body:", req.body); // Log the request to see if userId is passed correctly
+
+  try {
+    const game = await Game.findById(id);
+    if (!game) {
+      return res.status(404).json({ message: "Game not found" });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ message: "UserId is required" }); // Handle missing userId
+    }
+
+    // Check if the user has already purchased the game
+    if (game.purchasedBy.includes(userId)) {
+      return res
+        .status(400)
+        .json({ message: "User has already purchased this game" });
+    }
+
+    // Add the userId to the purchasedBy array
+    game.purchasedBy.push(userId);
+
+    await game.save(); // Save the updated game document
+
+    res.status(200).json({
+      message: "Game purchased successfully",
+      game,
+    });
+  } catch (error) {
+    console.error("Error processing purchase:", error);
+    res.status(500).json({ message: "Error processing purchase" });
+  }
+});
+
 router.put("/:id/increment-current-limit", async (req, res) => {
   const { id } = req.params;
 

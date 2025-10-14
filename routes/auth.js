@@ -120,6 +120,66 @@ router.post("/deposit", async (req, res) => {
   }
 });
 
+router.put("/addBetHistory/:userId", async (req, res) => {
+  const { userId } = req.params;
+  const { gameContent, gameName, gameDate, tipPrice } = req.body;
+
+  try {
+    // Find the user by ID
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Create a new bet entry
+    const newBet = {
+      gameContent,
+      gameName,
+      gameDate,
+      tipPrice,
+    };
+
+    // Add the new bet to the user's bet history
+    user.betHistory.push(newBet);
+
+    // Save the updated user document
+    await user.save();
+
+    res.status(200).json({
+      message: "Bet history updated successfully",
+      betHistory: user.betHistory,
+    });
+  } catch (error) {
+    console.error("Error adding bet to history:", error);
+    res.status(500).json({ message: "Error adding bet to history" });
+  }
+});
+
+router.post("/updateBalance", async (req, res) => {
+  const { userId, amount } = req.body;
+
+  try {
+    // Find the user by ID
+    const user = await User.findById(userId);
+    if (!user) return res.status(400).json({ message: "User not found" });
+
+    // Deduct the amount from the user's balance
+    user.availableBalance -= parseFloat(amount);
+
+    // Save the updated user document
+    await user.save();
+
+    // Send response back to frontend
+    res.status(200).json({
+      message: "Balance updated successfully",
+      availableBalance: user.availableBalance,
+    });
+  } catch (error) {
+    console.error("Error updating balance:", error);
+    res.status(500).json({ message: "Error updating balance" });
+  }
+});
+
 // =============== GET ALL USERS ===============
 router.get("/getUsers", async (req, res) => {
   try {

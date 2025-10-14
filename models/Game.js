@@ -12,6 +12,7 @@ const GameSchema = new mongoose.Schema({
   purchaseLimit: { type: Number },
   CurrentLimit: { type: Number, default: 0 },
   active: { type: Boolean, default: false },
+  purchasedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 });
 
 module.exports = mongoose.model("Game", GameSchema);
