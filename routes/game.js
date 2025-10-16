@@ -1,5 +1,6 @@
 const express = require("express");
 const Game = require("../models/Game");
+const User = require("../models/User");
 const router = express.Router();
 
 // Get all games
@@ -165,6 +166,44 @@ router.put("/:id/buy", async (req, res) => {
   } catch (error) {
     console.error("Error processing purchase:", error);
     res.status(500).json({ message: "Error processing purchase" });
+  }
+});
+router.put("/updategameStatus/:gameId", async (req, res) => {
+  const { gameId } = req.params;
+  const { gameStatus } = req.body;
+
+  try {
+    // Find all users who have the gameId in their bet history
+    const users = await User.find({ "betHistory.gameId": gameId });
+
+    if (users.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No users found with this gameId in bet history" });
+    }
+
+    // Iterate over each user and update the status of the bet
+    for (let user of users) {
+      const betIndex = user.betHistory.findIndex(
+        (bet) => bet.gameId === gameId
+      );
+
+      if (betIndex !== -1) {
+        user.betHistory[betIndex].status = gameStatus;
+      }
+
+      // Save the updated user document
+      await user.save();
+    }
+
+    res.status(200).json({
+      message: "Game status updated successfully for all users",
+      gameId,
+      gameStatus,
+    });
+  } catch (error) {
+    console.error("Error updating game status for users:", error);
+    res.status(500).json({ message: "Error updating game status" });
   }
 });
 
