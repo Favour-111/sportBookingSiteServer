@@ -122,7 +122,16 @@ router.post("/deposit", async (req, res) => {
 
 router.put("/addBetHistory/:userId", async (req, res) => {
   const { userId } = req.params;
-  const { gameContent, gameName, gameDate, tipPrice } = req.body;
+  const {
+    gameContent,
+    gameName,
+    gameDate,
+    gameId,
+    tipOdd,
+    tipName,
+    tipPrice,
+    status,
+  } = req.body;
 
   try {
     // Find the user by ID
@@ -133,10 +142,14 @@ router.put("/addBetHistory/:userId", async (req, res) => {
 
     // Create a new bet entry
     const newBet = {
+      gameId,
       gameContent,
       gameName,
       gameDate,
+      tipOdd,
+      tipName,
       tipPrice,
+      status,
     };
 
     // Add the new bet to the user's bet history
