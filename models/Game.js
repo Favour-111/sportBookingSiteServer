@@ -12,7 +12,7 @@ const GameSchema = new mongoose.Schema(
     duration: { type: Number, required: true }, // assuming duration is in minutes or hours
     purchaseLimit: { type: Number },
     CurrentLimit: { type: Number, default: 0 },
-    active: { type: Boolean, default: false },
+    active: { type: Boolean, default: true },
     status: { type: String, default: "Pending" },
     purchasedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   },
