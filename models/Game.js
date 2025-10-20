@@ -6,6 +6,7 @@ const GameSchema = new mongoose.Schema(
     tipPrice: { type: Number, required: true },
     oddRatio: { type: Number, required: true },
     bettingType: { type: String },
+    image: { type: String },
     bettingSites: { type: [String], required: true }, // assuming an array of betting sites
     confidenceLevel: { type: String, required: true }, // you could also use Number if it's a rating
     contentAfterPurchase: { type: String, required: true },

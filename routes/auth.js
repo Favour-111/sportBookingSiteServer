@@ -128,6 +128,7 @@ router.put("/addBetHistory/:userId", async (req, res) => {
     gameDate,
     gameId,
     tipOdd,
+    image,
     tipName,
     tipPrice,
     status,
@@ -144,6 +145,7 @@ router.put("/addBetHistory/:userId", async (req, res) => {
     const newBet = {
       gameId,
       gameContent,
+      image,
       gameName,
       gameDate,
       tipOdd,
