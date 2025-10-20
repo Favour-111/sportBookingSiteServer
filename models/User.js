@@ -14,6 +14,7 @@ const UserSchema = new mongoose.Schema({
       gameDate: Date,
       tipPrice: Number,
       tipOdd: String,
+      image: String,
       tipName: String,
       status: { type: String, default: "Pending" },
     },
