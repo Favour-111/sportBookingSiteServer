@@ -1,46 +1,57 @@
 const express = require("express");
-const Payment = require("../models/Payment");
-const User = require("../models/User");
-const router = express.Router();
-const dotenv = require("dotenv");
 const axios = require("axios");
+const dotenv = require("dotenv");
 dotenv.config();
-router.post("/payment", async (req, res) => {
-  const { amount, currency, email } = req.body;
 
+const router = express.Router();
+
+router.post("/payment", async (req, res) => {
   try {
-    // Make the API call to OxPay
+    // ✅ Dummy test data (replace with real values when ready)
+    const dummyPayment = {
+      amount: 50.0, // SGD 50.00
+      currency: "SGD",
+      order_id: `ORDER-${Date.now()}`,
+      description: "Test purchase - Betting site demo",
+      customer_email: "dummyuser@example.com",
+      redirect_url: "https://your-frontend.com/payment-success",
+      callback_url: "https://your-backend.com/api/payment/callback",
+    };
+
+    // ✅ Make payment request to OxPay
     const response = await axios.post(
-      "https://api.oxpay.com/v1/payments", // OxPay API endpoint for payments
-      {
-        amount: amount, // Amount to be paid
-        currency: currency, // Currency code (e.g., 'USD')
-        email: email, // Customer's email
-        // You can add any additional required parameters like description, redirect URLs, etc.
-      },
+      "https://api.oxpay.com/v1/payments",
+      dummyPayment,
       {
         headers: {
-          Authorization: `Bearer ${process.env.OXPAY_API_KEY}`, // Use your OxPay Merchant API Key
+          Authorization: `Bearer ${process.env.OXPAY_API_KEY}`,
           "Content-Type": "application/json",
         },
       }
     );
 
-    // Handle the response from OxPay
-    if (response.data.status === "success") {
+    // ✅ Handle success response
+    if (response.data && response.data.payment_url) {
       res.json({
-        message: "Payment processed successfully",
+        success: true,
+        message: "Dummy payment created successfully!",
+        payment_url: response.data.payment_url,
         data: response.data,
       });
     } else {
       res.status(400).json({
-        message: "Payment failed",
+        success: false,
+        message: "Failed to create dummy payment",
         error: response.data,
       });
     }
   } catch (error) {
-    console.error("Error processing payment:", error);
-    res.status(500).json({ message: "Server error" });
+    console.error("Payment Error:", error.response?.data || error.message);
+    res.status(500).json({
+      success: false,
+      message: "Error creating dummy payment",
+      error: error.response?.data || error.message,
+    });
   }
 });
 
