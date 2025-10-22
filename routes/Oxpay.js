@@ -14,7 +14,7 @@ router.post("/create-payment", async (req, res) => {
 
   try {
     const response = await axios.post(
-      "https://sandbox.oxapay.com/api/v1/create-payment",
+      "https://api.oxapay.com/api/v1/create-payment",
       {
         merchant: process.env.OXAPAY_MERCHANT_KEY, // Your merchant key from dashboard
         amount: amount,
