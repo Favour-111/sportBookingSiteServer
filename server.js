@@ -10,7 +10,7 @@ const authRoutes = require("./routes/auth");
 const gameRoutes = require("./routes/game");
 const messageRoutes = require("./routes/message");
 const paymentRoutes = require("./routes/payment");
-
+const oxapayRoutes = require("./routes/Oxpay");
 dotenv.config();
 
 const app = express();
@@ -49,7 +49,8 @@ io.on("connection", (socket) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/games", gameRoutes);
 app.use("/api/message", messageRoutes);
-app.use("/api/payments", paymentRoutes);
+// app.use("/api/payments", paymentRoutes);
+app.use("/api/payment", oxapayRoutes);
 
 // ✅ MongoDB connection
 mongoose
