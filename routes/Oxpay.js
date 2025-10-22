@@ -14,7 +14,7 @@ router.post("/create-payment", async (req, res) => {
 
   try {
     const response = await axios.post(
-      "https://api.oxapay.com/api/v1/create-payment", // Use sandbox if your key is test mode
+      "https://sandbox.oxapay.com/api/v1/create-payment",
       {
         merchant: process.env.OXAPAY_MERCHANT_KEY, // Your merchant key from dashboard
         amount: amount,
@@ -36,14 +36,12 @@ router.post("/create-payment", async (req, res) => {
     res.json(response.data);
   } catch (error) {
     console.error("Payment Error:", error.response?.data || error.message);
-    res
-      .status(500)
-      .json(
-        error.response?.data || {
-          result: 0,
-          message: "Payment creation failed",
-        }
-      );
+    res.status(500).json(
+      error.response?.data || {
+        result: 0,
+        message: "Payment creation failed",
+      }
+    );
   }
 });
 
