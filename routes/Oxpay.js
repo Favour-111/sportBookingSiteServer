@@ -14,8 +14,8 @@ router.post("/create-invoice", async (req, res) => {
       lifetime = 60,
       order_id,
       description = "Payment for Order",
-      callback_url = `http://localhost:4000/api/payment/oxapay-webhook`,
-      return_url = `http://localhost:4000/success`,
+      callback_url = `${process.env.SERVER}/api/payment/oxapay-webhook`,
+      return_url = `${process.env.API}/`,
       email,
       thanks_message = "Thank you for your payment",
     } = req.body;
@@ -56,6 +56,27 @@ router.post("/create-invoice", async (req, res) => {
       error: "Failed to create OxaPay invoice",
       details: err.response?.data,
     });
+  }
+});
+router.post("/oxapay-webhook", async (req, res) => {
+  try {
+    const { order_id, status, amount } = req.body;
+
+    // Extract userId from order_id, e.g., "deposit_123456789_1698200000000"
+    const userId = order_id.split("_")[1];
+
+    if (status === "success" && userId) {
+      const user = await UserModel.findById(userId);
+      if (user) {
+        user.availableBalance = (user.availableBalance || 0) + amount;
+        await user.save();
+      }
+    }
+
+    res.status(200).json({ message: "Webhook received" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Webhook failed" });
   }
 });
 
