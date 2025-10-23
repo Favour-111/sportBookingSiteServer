@@ -34,7 +34,7 @@ router.post("/create-invoice", async (req, res) => {
 
     // OxaPay invoice endpoint
     const response = await axios.post(
-      "https://api.oxapay.com/v1/invoice",
+      "https://api.oxapay.com/v1/payment/invoice",
       body,
       { headers: { "Content-Type": "application/json" } }
     );
