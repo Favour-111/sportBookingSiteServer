@@ -1,10 +1,9 @@
-import express from "express";
-import axios from "axios";
-import dotenv from "dotenv";
+const express = require("express");
+const axios = require("axios");
+const dotenv = require("dotenv");
 dotenv.config();
 
 const router = express.Router();
-const MERCHANT_KEY = process.env.OXAPAY_MERCHANT_KEY;
 
 router.post("/create-crypto-payment", async (req, res) => {
   try {
@@ -17,7 +16,7 @@ router.post("/create-crypto-payment", async (req, res) => {
     } = req.body;
 
     const body = {
-      merchant: MERCHANT_KEY,
+      merchant: process.env.OXAPAY_MERCHANT_KEY,
       amount,
       currency,
       network,
@@ -44,4 +43,4 @@ router.post("/create-crypto-payment", async (req, res) => {
   }
 });
 
-export default router;
+module.exports = router;
