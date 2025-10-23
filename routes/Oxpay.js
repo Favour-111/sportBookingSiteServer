@@ -72,7 +72,8 @@ router.post("/oxapay-webhook", async (req, res) => {
     // Extract userId from order_id: "deposit_USERID_TIMESTAMP"
     const userId = order_id.split("_")[1];
 
-    if (status === "success" && userId) {
+    // OxaPay returns status 'Paid' when payment is successful
+    if ((status === "Paid" || status === "success") && userId) {
       const user = await User.findById(userId);
       if (user) {
         user.availableBalance = (user.availableBalance || 0) + Number(amount);
