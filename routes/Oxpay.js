@@ -16,7 +16,7 @@ router.post("/create-payment2", async (req, res) => {
   try {
     const response = await axios.post(
       // ✅ Use correct endpoint depending on mode
-      "https://api.oxapay.com/api/v1/create-payment", // LIVE
+      "https://api.oxapay.com/v1/payment", // LIVE
       {
         merchant: process.env.OXAPAY_MERCHANT_KEY, // Your test merchant key
         amount,
