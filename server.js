@@ -10,7 +10,7 @@ const authRoutes = require("./routes/auth");
 const gameRoutes = require("./routes/game");
 const messageRoutes = require("./routes/message");
 const paymentRoutes = require("./routes/payment");
-const oxapayRoutes = require("./routes/Oxpay");
+const oxapayRoutes = require("./routes/Oxpay.js");
 dotenv.config();
 
 const app = express();
