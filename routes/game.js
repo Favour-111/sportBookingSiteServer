@@ -148,7 +148,17 @@ router.put("/:id/buy", async (req, res) => {
     const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
     const CHAT_ID = process.env.TELEGRAM_CHAT_ID; // Replace with your admin/group chat ID
     const user = await User.findById(userId);
-    const text = `🎮 Game Purchased!\n\n👤 *User:* ${user.userName}(${user.email})\nGame: ${game.tipTitle}\nPrice: ${game.tipPrice}`;
+    const text = `
+🎮 *New Game Purchase!*
+
+👤 *User:* ${user.userName} (${user.email})
+🆔 *User ID:* ${user._id}
+
+🕹 *Game:* ${game.tipTitle}
+💵 *Price:* $${game.tipPrice}
+
+📅 *Date:* ${new Date().toLocaleString()}
+`;
 
     await axios.post(
       `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
