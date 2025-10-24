@@ -1,4 +1,3 @@
-// routes/payment.js
 const express = require("express");
 const axios = require("axios");
 const dotenv = require("dotenv");
@@ -11,7 +10,7 @@ const router = express.Router();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Helper: send Telegram message
+// === Helper: send Telegram message ===
 const sendTelegramMessage = async (message) => {
   try {
     await axios.post(
@@ -73,9 +72,9 @@ router.post("/create-invoice", async (req, res) => {
 
     const { track_id, pay_url } = response.data;
 
-    // // 🟢 Send Telegram alert
+    // 🟢 Send Telegram alert when invoice is created
     // await sendTelegramMessage(
-    //   `🟢 *New Payment Request Created*\n\n👤 *User:* ${username}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Track ID:* ${track_id}\n🔗 [Open Payment Link](${pay_url})`
+    //   `🟢 *New Payment Request Created*\n\n👤 *User:* ${username}\n📧 *Email:* ${email}\n🆔 *User ID:* ${userId}\n💰 *Amount:* $${amount}\n📦 *Track ID:* ${track_id}\n🔗 [Open Payment Link](${pay_url})`
     // );
 
     res.json(response.data);
@@ -106,7 +105,7 @@ router.post("/oxapay-webhook", async (req, res) => {
 
         // 🟢 Telegram alert for successful payment
         await sendTelegramMessage(
-          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.userName}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Order ID:* ${order_id}`
+          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.userName}\n📧 *Email:* ${user.email}\n🆔 *User ID:* ${userId}\n💰 *Amount:* $${amount}\n📦 *Order ID:* ${order_id}`
         );
       }
     }
