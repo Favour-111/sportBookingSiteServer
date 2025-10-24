@@ -73,10 +73,10 @@ router.post("/create-invoice", async (req, res) => {
 
     const { track_id, pay_url } = response.data;
 
-    // 🟢 Send Telegram alert
-    await sendTelegramMessage(
-      `🟢 *New Payment Request Created*\n\n👤 *User:* ${username}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Track ID:* ${track_id}\n🔗 [Open Payment Link](${pay_url})`
-    );
+    // // 🟢 Send Telegram alert
+    // await sendTelegramMessage(
+    //   `🟢 *New Payment Request Created*\n\n👤 *User:* ${username}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Track ID:* ${track_id}\n🔗 [Open Payment Link](${pay_url})`
+    // );
 
     res.json(response.data);
   } catch (err) {
@@ -106,7 +106,7 @@ router.post("/oxapay-webhook", async (req, res) => {
 
         // 🟢 Telegram alert for successful payment
         await sendTelegramMessage(
-          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.username}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Order ID:* ${order_id}`
+          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.userName}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Order ID:* ${order_id}`
         );
       }
     }
