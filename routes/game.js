@@ -2,7 +2,7 @@ const express = require("express");
 const Game = require("../models/Game");
 const User = require("../models/User");
 const router = express.Router();
-
+const axios = require("axios");
 // Get all games
 router.get("/allGame", async (req, res) => {
   try {
@@ -136,14 +136,32 @@ router.put("/:id/buy", async (req, res) => {
       return res.status(400).json({ message: "Already purchased" });
     }
 
+    // Save the purchase
     game.purchasedBy.push(userId);
     await game.save();
 
+    // Emit to socket.io clients
     const io = req.app.get("io");
     io.emit("gamePurchased", { gameId: id, userId });
 
+    // ✅ Telegram Notification
+    const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+    const CHAT_ID = process.env.TELEGRAM_CHAT_ID; // Replace with your admin/group chat ID
+    const user = await User.findById(userId);
+    const text = `🎮 Game Purchased!\n\n👤 *User:* ${user.userName}(${user.email})\nGame: ${game.tipTitle}\nPrice: ${game.tipPrice}`;
+
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: CHAT_ID,
+        text,
+        parse_mode: "Markdown",
+      }
+    );
+
     res.status(200).json({ message: "Game purchased successfully", game });
   } catch (error) {
+    console.error("Error processing purchase:", error);
     res.status(500).json({ message: "Error processing purchase" });
   }
 });
