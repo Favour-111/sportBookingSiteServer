@@ -105,7 +105,7 @@ router.post("/oxapay-webhook", async (req, res) => {
 
         // 🟢 Telegram alert for successful payment
         await sendTelegramMessage(
-          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.userName}\n📧 *Email:* ${user.email}\n🆔 *User ID:* ${userId}\n💰 *Amount:* $${amount}\n📦 *Order ID:* ${order_id}`
+          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.userName}(${user.email})\n🆔 *User ID:* ${userId}\n💰 *Amount:* $${amount}\n📦 *Order ID:* ${order_id}`
         );
       }
     }
