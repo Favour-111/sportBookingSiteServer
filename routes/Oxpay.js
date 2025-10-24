@@ -104,9 +104,17 @@ router.post("/oxapay-webhook", async (req, res) => {
         console.log(`Balance updated for user ${userId}: +${amount}`);
 
         // 🟢 Telegram alert for successful payment
-        await sendTelegramMessage(
-          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.userName}(${user.email})\n🆔 *User ID:* ${userId}\n💰 *Amount:* $${amount}\n📦 *Order ID:* ${order_id}`
-        );
+        await sendTelegramMessage(`
+✅ *Payment Confirmed!*
+
+👤 *User:* ${user.userName} (${user.email})
+🆔 *User ID:* ${userId}
+
+💰 *Amount:* $${amount}
+📦 *Order ID:* ${order_id}
+
+📅 *Date:* ${new Date().toLocaleString()}
+`);
       }
     }
 
