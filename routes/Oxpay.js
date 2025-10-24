@@ -2,15 +2,32 @@
 const express = require("express");
 const axios = require("axios");
 const dotenv = require("dotenv");
-const User = require("../models/User"); // Adjust path
+const User = require("../models/User");
 dotenv.config();
 
 const router = express.Router();
 
-// Middleware for JSON
-router.use(express.json());
+// === Telegram Config ===
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
-// Create OxaPay invoice
+// Helper: send Telegram message
+const sendTelegramMessage = async (message) => {
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: TELEGRAM_CHAT_ID,
+        text: message,
+        parse_mode: "Markdown",
+      }
+    );
+  } catch (err) {
+    console.error("Failed to send Telegram message:", err.message);
+  }
+};
+
+// === Create OxaPay Invoice ===
 router.post("/create-invoice", async (req, res) => {
   try {
     const {
@@ -20,6 +37,8 @@ router.post("/create-invoice", async (req, res) => {
       order_id,
       description = "Deposit Payment",
       email,
+      username,
+      userId,
     } = req.body;
 
     const callback_url = `${process.env.SERVER}/api/payment/oxapay-webhook`;
@@ -52,6 +71,13 @@ router.post("/create-invoice", async (req, res) => {
       }
     );
 
+    const { track_id, pay_url } = response.data;
+
+    // 🟢 Send Telegram alert
+    await sendTelegramMessage(
+      `🟢 *New Payment Request Created*\n\n👤 *User:* ${username}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Track ID:* ${track_id}\n🔗 [Open Payment Link](${pay_url})`
+    );
+
     res.json(response.data);
   } catch (err) {
     console.error("OxaPay Error:", err.response?.data || err.message);
@@ -62,23 +88,26 @@ router.post("/create-invoice", async (req, res) => {
   }
 });
 
-// Webhook endpoint
+// === Webhook ===
 router.post("/oxapay-webhook", async (req, res) => {
   try {
     console.log("Webhook received:", req.body);
 
     const { order_id, status, amount } = req.body;
-
-    // Extract userId from order_id: "deposit_USERID_TIMESTAMP"
     const userId = order_id.split("_")[1];
 
-    // OxaPay returns status 'Paid' when payment is successful
     if ((status === "Paid" || status === "success") && userId) {
       const user = await User.findById(userId);
       if (user) {
         user.availableBalance = (user.availableBalance || 0) + Number(amount);
         await user.save();
+
         console.log(`Balance updated for user ${userId}: +${amount}`);
+
+        // 🟢 Telegram alert for successful payment
+        await sendTelegramMessage(
+          `✅ *Payment Confirmed*\n\n👤 *User:* ${user.username}\n🆔 *User ID:* ${userId}\n💰 *Amount:* ${amount}\n📦 *Order ID:* ${order_id}`
+        );
       }
     }
 
