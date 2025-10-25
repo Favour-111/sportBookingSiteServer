@@ -56,7 +56,7 @@ router.post("/create-invoice", async (req, res) => {
       under_paid_coverage: 10,
       auto_withdrawal: true,
       mixed_payment: true,
-      sandbox: true, // false in production
+      // sandbox: true,
     };
 
     const response = await axios.post(
