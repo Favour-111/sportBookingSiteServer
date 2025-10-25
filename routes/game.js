@@ -182,33 +182,38 @@ router.put("/updategameStatus/:gameId", async (req, res) => {
   const { gameStatus } = req.body;
 
   try {
-    const users = await User.find({ "betHistory.gameId": gameId });
-    if (!users.length)
-      return res.status(404).json({ message: "No users found" });
+    // ✅ 1. Update the game in the Game collection
+    const updatedGame = await Game.findByIdAndUpdate(
+      gameId,
+      { status: gameStatus },
+      { new: true }
+    );
 
-    for (let user of users) {
-      const betIndex = user.betHistory.findIndex(
-        (bet) => bet.gameId === gameId
-      );
-      if (betIndex !== -1) {
-        user.betHistory[betIndex].status = gameStatus;
-        await user.save();
-      }
+    if (!updatedGame) {
+      return res.status(404).json({ message: "Game not found" });
     }
 
+    // ✅ 2. Update all users’ betHistory where this game exists
+    await User.updateMany(
+      { "betHistory.gameId": gameId },
+      { $set: { "betHistory.$[elem].status": gameStatus } },
+      { arrayFilters: [{ "elem.gameId": gameId }] }
+    );
+
+    // ✅ 3. Emit socket update event
     const io = req.app.get("io");
     io.emit("gameStatusUpdated", { gameId, gameStatus });
 
     res.status(200).json({
-      message: "Game status updated successfully for all users",
+      message: "Game status updated for everyone",
       gameId,
       gameStatus,
     });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ message: "Error updating game status" });
   }
 });
-
 // ---------------- INCREMENT CURRENT LIMIT ----------------
 router.put("/:id/increment-current-limit", async (req, res) => {
   const { id } = req.params;
