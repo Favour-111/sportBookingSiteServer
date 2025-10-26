@@ -7,9 +7,42 @@ const nodemailer = require("nodemailer");
 const crypto = require("crypto");
 const Token = require("../models/Token");
 const axios = require("axios");
+const passport = require("passport");
 router.get("/", async (req, res) => {
   res.send({ msg: "connected" });
 });
+
+// =============== GoogleSigUP ===============
+// GOOGLE AUTH
+router.get(
+  "/google",
+  passport.authenticate("google", { scope: ["profile", "email"] })
+);
+
+router.get(
+  "/google/callback",
+  passport.authenticate("google", { failureRedirect: "/login" }),
+  (req, res) => {
+    const token = jwt.sign({ userId: req.user._id }, "secretKey", {
+      expiresIn: "1h",
+    });
+    res.redirect(`${process.env.FRONTEND_URL}/auth-success?token=${token}`);
+  }
+);
+
+// TELEGRAM AUTH
+router.get("/telegram", passport.authenticate("telegram", { session: false }));
+
+router.get(
+  "/telegram/callback",
+  passport.authenticate("telegram", { session: false }),
+  (req, res) => {
+    const token = jwt.sign({ userId: req.user._id }, "secretKey", {
+      expiresIn: "1h",
+    });
+    res.redirect(`${process.env.FRONTEND_URL}/auth-success?token=${token}`);
+  }
+);
 
 // =============== SIGNUP ===============
 router.post("/signup", async (req, res) => {

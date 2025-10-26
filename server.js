@@ -11,6 +11,8 @@ const gameRoutes = require("./routes/game");
 const messageRoutes = require("./routes/message");
 const paymentRoutes = require("./routes/payment");
 const oxapayRoutes = require("./routes/Oxpay.js");
+require("./routes/bot.js");
+
 dotenv.config();
 
 const app = express();
