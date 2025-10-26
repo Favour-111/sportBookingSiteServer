@@ -14,7 +14,7 @@ const oxapayRoutes = require("./routes/Oxpay.js");
 require("./routes/bot.js");
 const passport = require("passport");
 const cookieParser = require("cookie-parser");
-require("./Config/passport.js");
+// require("./Config/passport.js");
 
 dotenv.config();
 

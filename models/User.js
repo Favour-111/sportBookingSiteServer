@@ -2,9 +2,19 @@ const mongoose = require("mongoose");
 
 const UserSchema = new mongoose.Schema({
   googleId: { type: String },
-  userName: { type: String, required: true },
+  userName: {
+    type: String,
+    required: function () {
+      return !this.googleId;
+    },
+  },
   email: { type: String, required: true },
-  password: { type: String, required: true },
+  password: {
+    type: String,
+    required: function () {
+      return !this.googleId;
+    },
+  },
   availableBalance: { type: Number, default: 0 },
 
   betHistory: [
