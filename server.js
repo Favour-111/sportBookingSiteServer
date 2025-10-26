@@ -12,12 +12,17 @@ const messageRoutes = require("./routes/message");
 const paymentRoutes = require("./routes/payment");
 const oxapayRoutes = require("./routes/Oxpay.js");
 require("./routes/bot.js");
+const passport = require("passport");
+const cookieParser = require("cookie-parser");
+require("./Config/passport.js");
 
 dotenv.config();
 
 const app = express();
+app.use(cookieParser());
 app.use(express.json());
-app.use(cors());
+app.use(cors({ origin: process.env.API, credentials: true }));
+app.use(passport.initialize());
 
 // Create HTTP server
 const server = http.createServer(app);

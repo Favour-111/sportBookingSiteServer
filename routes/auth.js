@@ -4,43 +4,30 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const router = express.Router();
 const nodemailer = require("nodemailer");
+const passport = require("passport");
 const crypto = require("crypto");
 const Token = require("../models/Token");
 const axios = require("axios");
-const passport = require("passport");
 router.get("/", async (req, res) => {
   res.send({ msg: "connected" });
 });
 
 // =============== GoogleSigUP ===============
-// GOOGLE AUTH
+// Google login route
 router.get(
   "/google",
   passport.authenticate("google", { scope: ["profile", "email"] })
 );
 
+// Google callback
 router.get(
   "/google/callback",
-  passport.authenticate("google", { failureRedirect: "/login" }),
+  passport.authenticate("google", { session: false }),
   (req, res) => {
-    const token = jwt.sign({ userId: req.user._id }, "secretKey", {
-      expiresIn: "1h",
+    const token = jwt.sign({ id: req.user._id }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
     });
-    res.redirect(`${process.env.FRONTEND_URL}/auth-success?token=${token}`);
-  }
-);
-
-// TELEGRAM AUTH
-router.get("/telegram", passport.authenticate("telegram", { session: false }));
-
-router.get(
-  "/telegram/callback",
-  passport.authenticate("telegram", { session: false }),
-  (req, res) => {
-    const token = jwt.sign({ userId: req.user._id }, "secretKey", {
-      expiresIn: "1h",
-    });
-    res.redirect(`${process.env.FRONTEND_URL}/auth-success?token=${token}`);
+    res.redirect(`${process.env.CLIENT_URL}/auth/success?token=${token}`);
   }
 );
 
