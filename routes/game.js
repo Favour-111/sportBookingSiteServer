@@ -3,6 +3,7 @@ const Game = require("../models/Game");
 const User = require("../models/User");
 const router = express.Router();
 const axios = require("axios");
+const { sendSafeTelegramMessage } = require("../utils/telegramHelper");
 // Get all games
 router.get("/allGame", async (req, res) => {
   try {
@@ -13,7 +14,45 @@ router.get("/allGame", async (req, res) => {
   }
 });
 
+// Get admin statistics
+router.get("/stats", async (req, res) => {
+  try {
+    const users = await User.countDocuments();
+    const games = await Game.countDocuments();
+    const activeTips = await Game.countDocuments({ active: true });
+
+    // Fetch all users and include only betHistory
+    const allUsers = await User.find({}, "betHistory");
+
+    // Sum up all tipPrice values inside each user's betHistory
+    let totalRevenue = 0;
+    allUsers.forEach((user) => {
+      if (Array.isArray(user.betHistory)) {
+        totalRevenue += user.betHistory.reduce(
+          (sum, bet) => sum + (bet.tipPrice || 0),
+          0
+        );
+      }
+    });
+
+    res.json({
+      success: true,
+      users,
+      tips: games,
+      activeTips,
+      revenue: totalRevenue,
+    });
+  } catch (err) {
+    console.error("⚠️ Error generating game stats:", err.message);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate statistics",
+    });
+  }
+});
+
 // Admin route to add a new game
+
 router.post("/add", async (req, res) => {
   const {
     tipTitle,
@@ -146,9 +185,10 @@ router.put("/:id/buy", async (req, res) => {
 
     // ✅ Telegram Notification
     const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-    const CHAT_ID = process.env.TELEGRAM_CHAT_ID; // Replace with your admin/group chat ID
+    const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
     const user = await User.findById(userId);
-    const text = `
+
+    const message = `
 🎮 *New Game Purchase!*
 
 👤 *User:* ${user.userName} (${user.email})
@@ -160,14 +200,7 @@ router.put("/:id/buy", async (req, res) => {
 📅 *Date:* ${new Date().toLocaleString()}
 `;
 
-    await axios.post(
-      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: CHAT_ID,
-        text,
-        parse_mode: "Markdown",
-      }
-    );
+    await sendSafeTelegramMessage(CHAT_ID, message, TELEGRAM_BOT_TOKEN);
 
     res.status(200).json({ message: "Game purchased successfully", game });
   } catch (error) {
@@ -182,38 +215,59 @@ router.put("/updategameStatus/:gameId", async (req, res) => {
   const { gameStatus } = req.body;
 
   try {
-    // ✅ 1. Update the game in the Game collection
+    const game = await Game.findById(gameId);
+    if (!game) {
+      return res.status(404).json({ message: "Game not found" });
+    }
+
+    // ✅ Check duration logic
+    if (game.active) {
+      return res.status(400).json({
+        message: "Game is still active. Deactivate it before updating status.",
+      });
+    }
+
+    // ✅ Calculate if duration elapsed
+    const createdAt = game.createdAt || game._id.getTimestamp();
+    const elapsedMs = Date.now() - new Date(createdAt).getTime();
+    const durationMs = (game.duration || 0) * 60 * 1000;
+
+    if (elapsedMs < durationMs) {
+      const remaining = Math.ceil((durationMs - elapsedMs) / 60000);
+      return res.status(400).json({
+        message: `Game duration not yet elapsed. Try again in ${remaining} min${
+          remaining !== 1 ? "s" : ""
+        }.`,
+      });
+    }
+
+    // ✅ Proceed to update
     const updatedGame = await Game.findByIdAndUpdate(
       gameId,
       { status: gameStatus },
       { new: true }
     );
 
-    if (!updatedGame) {
-      return res.status(404).json({ message: "Game not found" });
-    }
-
-    // ✅ 2. Update all users’ betHistory where this game exists
     await User.updateMany(
       { "betHistory.gameId": gameId },
       { $set: { "betHistory.$[elem].status": gameStatus } },
       { arrayFilters: [{ "elem.gameId": gameId }] }
     );
 
-    // ✅ 3. Emit socket update event
     const io = req.app.get("io");
     io.emit("gameStatusUpdated", { gameId, gameStatus });
 
     res.status(200).json({
-      message: "Game status updated for everyone",
+      message: "Game status updated successfully",
       gameId,
       gameStatus,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Error updating game status:", error);
     res.status(500).json({ message: "Error updating game status" });
   }
 });
+
 // ---------------- INCREMENT CURRENT LIMIT ----------------
 router.put("/:id/increment-current-limit", async (req, res) => {
   const { id } = req.params;

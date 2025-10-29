@@ -224,6 +224,100 @@ router.get("/getUsers", async (req, res) => {
     res.send({ success: false, msg: "error fetching users" });
   }
 });
+// PUT /api/auth/updateUserRole/:id
+router.put("/updateUserRole/:id", async (req, res) => {
+  try {
+    const { role } = req.body;
+    const userId = req.params.id;
+
+    // Validate input
+    if (!role) {
+      return res.status(400).json({ message: "Role is required" });
+    }
+
+    // Find and update the user
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { role },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.status(200).json({
+      message: "User role updated successfully",
+      user: updatedUser,
+    });
+  } catch (error) {
+    console.error("Error updating user role:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// Get single user by ID
+router.get("/getUser/:id", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id).select(
+      "userName email availableBalance role"
+    );
+    if (!user) return res.status(404).json({ message: "User not found" });
+    res.json({ success: true, user });
+  } catch (error) {
+    console.error("Error fetching user:", error);
+    res.status(500).json({ success: false, message: "Error fetching user" });
+  }
+});
+// Telegram Signup Route
+router.post("/telegram-signup", async (req, res) => {
+  try {
+    const { telegramId, userName, email } = req.body;
+
+    // Check if user already exists
+    let user = await User.findOne({ email });
+
+    if (user) {
+      return res.status(200).json({
+        message: "User already exists",
+        userId: user._id, // ✅ include the MongoDB _id
+        user,
+      });
+    }
+
+    // Create new user (no password needed)
+    const newUser = new User({
+      userName,
+      email,
+      password: "telegram_user", // dummy password
+      telegramId, // store Telegram ID here
+    });
+
+    await newUser.save();
+
+    // ✅ Return MongoDB _id and user object
+    res.status(201).json({
+      message: "Telegram user created",
+      userId: newUser._id,
+      user: newUser,
+    });
+  } catch (error) {
+    console.error("Error creating Telegram user:", error);
+    res.status(500).json({ message: "Error creating Telegram user" });
+  }
+});
+
+router.get("/getUserById/:id", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    res.status(200).json({ success: true, user });
+  } catch (error) {
+    console.error("Error fetching user by ID:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
 
 // =============== DELETE USER ===============
 router.delete("/deleteUser/:id", async (req, res) => {
