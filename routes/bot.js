@@ -1,6 +1,8 @@
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 const { escapeMarkdownV2, safeSend } = require("../utils/telegramSafe");
+const User = require("../models/User");
+const LinkToken = require("./LinkToken");
 // === CONFIG ===
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set in env");
@@ -61,29 +63,45 @@ async function apiDelete(path) {
 
 // === Utility: ensure user exists in backend and in userContext ===
 async function ensureUserContext(chatId, from) {
+  const tgIdStr = chatId.toString();
+
+  // 1️⃣ Check in-memory cache first
   let ctx = userContext.get(chatId);
   if (ctx && ctx.userId) return ctx;
 
-  const userName =
-    (from && (from.first_name || from.username)) || `User_${chatId}`;
-  const email = `${(from && from.username) || `tg_${from.id}`}@telegram.local`;
-  const telegramId = from && from.id;
-
   try {
-    const res = await apiPost("/api/auth/telegram-signup", {
-      telegramId,
-      userName,
-      email,
-    });
+    // 2️⃣ Check if this Telegram ID is already linked to a website account
+    let user = await User.findOne({ telegramId: tgIdStr });
 
-    const user = res.data.user;
-    if (!user || !user._id)
-      throw new Error("Invalid user response from backend");
+    if (!user) {
+      // 3️⃣ If not linked, create a Telegram-only user
+      const userName =
+        (from && (from.first_name || from.username)) || `User_${chatId}`;
+      const email = `${
+        (from && from.username) || `tg_${chatId}`
+      }@telegram.local`;
 
-    ctx = { userId: user._id, balance: user.availableBalance || 0, telegramId };
+      const res = await apiPost("/api/auth/telegram-signup", {
+        telegramId: tgIdStr,
+        userName,
+        email,
+      });
+
+      user = res.data.user;
+      if (!user || !user._id)
+        throw new Error("Invalid user response from backend");
+    }
+
+    // 4️⃣ Store context in memory
+    ctx = {
+      userId: user._id,
+      balance: user.availableBalance || 0,
+      telegramId: tgIdStr,
+    };
     userContext.set(chatId, ctx);
+
     console.log(
-      `✅ ensureUserContext created for chat ${chatId} => user ${user._id}`
+      `✅ ensureUserContext set for chat ${chatId} => user ${user._id}`
     );
     return ctx;
   } catch (err) {
@@ -100,39 +118,50 @@ function escapeMarkdown(text = "") {
 /**
  * Show all game history (admin-style view)
  */
-async function handleAllTipsHistory(chatId) {
-  try {
-    const res = await apiGet("/api/games/allGame");
-    const games = res.data || [];
+const tipsPagination = {}; // store pagination state per chat
 
-    if (!games.length) {
-      return bot.sendMessage(chatId, "📭 <b>No game history found yet.</b>", {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "⬅️ Back", callback_data: "admin_panel" }],
-            [{ text: "🔃 Refresh", callback_data: "admin_panel" }],
-          ],
-        },
-      });
+async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
+  try {
+    // Cache tips for this chat
+    if (!tipsPagination[chatId] || !tipsPagination[chatId].games) {
+      const res = await apiGet("/api/games/allGame");
+      const games = res.data || [];
+      if (!games.length) {
+        return bot.sendMessage(chatId, "📭 <b>No game history found yet.</b>", {
+          parse_mode: "HTML",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Back", callback_data: "admin_panel" }],
+              [{ text: "🔃 Refresh", callback_data: "history" }],
+            ],
+          },
+        });
+      }
+      tipsPagination[chatId] = { games, page: 1 };
     }
 
-    let message = `📈 <b>All Tips History</b> (${games.length})\n───────────────\n`;
+    const { games } = tipsPagination[chatId];
+    const totalPages = Math.ceil(games.length / 10);
+    const currentPage = Math.min(Math.max(page, 1), totalPages);
+    tipsPagination[chatId].page = currentPage;
 
-    const keyboard = [];
+    const start = (currentPage - 1) * 10;
+    const end = start + 10;
+    const pageGames = games.slice(start, end);
 
-    for (let i = 0; i < games.length; i++) {
-      const g = games[i];
+    let message = `📈 <b>All Tips History</b> (${games.length})\n──────────────────────\n`;
+    const reversedGames = [...pageGames].reverse();
+    for (let i = 0; i < reversedGames.length; i++) {
+      const g = reversedGames[i];
       const date = new Date(g.createdAt);
       const formattedDate = `${date.getDate()}/${date.getMonth() + 1}`;
-      const isLast = i === games.length - 1; // check if it's the last item
 
-      message += `\n <b>${
+      message += `\n<b>${
         g.status === "Hit✅"
-          ? "✅Hit"
+          ? "✅ Hit"
           : g.status === "Miss❌"
-          ? "❌Miss"
-          : "⌛Pending"
+          ? "❌ Miss"
+          : "⌛ Pending"
       } ${escapeHTML(g.tipTitle)} - ${escapeHTML(
         g.contentAfterPurchase
       )}</b>\n`;
@@ -143,27 +172,56 @@ async function handleAllTipsHistory(chatId) {
         String(g.purchasedBy.length || 0)
       )} users purchased this tip\n`;
 
-      // add blockquote section
       message += `<blockquote>💸 <b>250₪ turned into ${escapeHTML(
         (250 * g.oddRatio).toLocaleString()
-      )}₪ 💸</b>`;
+      )}₪ 💸</b></blockquote>\n`;
 
-      // only include the separator if it's not the last game
-      if (!isLast) {
-        message += `\n─────────────────────`;
+      if (i < pageGames.length - 1) {
+        message += `──────────────────────\n`;
       }
-
-      message += `</blockquote>\n`;
     }
 
-    // Add back and refresh buttons
-    keyboard.push([{ text: "🔃 Refresh", callback_data: "history" }]);
-    keyboard.push([{ text: "⬅️ Back", callback_data: "main_menu" }]);
+    // Pagination buttons (3 centered)
+    const paginationRow = [
+      {
+        text: "⬅️ Prev",
+        callback_data:
+          currentPage > 1 ? `tips_history_page_${currentPage - 1}` : "noop",
+      },
+      {
+        text: `📄 ${currentPage}/${totalPages}`,
+        callback_data: "noop",
+      },
+      {
+        text: "➡️ Next",
+        callback_data:
+          currentPage < totalPages
+            ? `tips_history_page_${currentPage + 1}`
+            : "noop",
+      },
+    ];
 
-    await bot.sendMessage(chatId, message, {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: keyboard },
-    });
+    const controlRow = [
+      { text: "🔃 Refresh", callback_data: "history" },
+      { text: "⬅️ Back", callback_data: "main_menu" },
+    ];
+
+    const inlineKeyboard = [paginationRow, controlRow];
+
+    // Edit message if already sent, else send new
+    if (messageId) {
+      await bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
+    } else {
+      await bot.sendMessage(chatId, message, {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
+    }
   } catch (err) {
     console.error("handleAllTipsHistory error:", err.message || err);
     await bot.sendMessage(
@@ -173,7 +231,62 @@ async function handleAllTipsHistory(chatId) {
     );
   }
 }
+bot.on("successful_payment", async (msg) => {
+  const chatId = msg.chat.id;
+  const payment = msg.successful_payment;
+  console.log("✅ Stars payment received:", payment);
 
+  // Reverse convert to USD
+  const totalStars = payment.total_amount;
+  const amountUSD = (totalStars / 3846) * 50;
+
+  try {
+    // Update backend
+    await axios.post(`${BACKEND_URL}/api/auth/deposit`, {
+      userId: payment.invoice_payload.split("_")[2],
+      amount: amountUSD,
+    });
+
+    await bot.sendMessage(
+      chatId,
+      `🎉 *Payment Successful!*\n\n💰 $${amountUSD.toFixed(
+        2
+      )} has been added to your account.`,
+      { parse_mode: "Markdown" }
+    );
+  } catch (err) {
+    console.error("❌ Error updating backend:", err.message);
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Payment succeeded, but balance update failed. Please contact support."
+    );
+  }
+
+  delete sessions[chatId]; // clean up session
+});
+
+// Add pagination handling in your callback_query listener
+bot.on("callback_query", async (query) => {
+  const { data, message } = query;
+  const chatId = message.chat.id;
+
+  try {
+    // Handle pagination
+    if (data.startsWith("tips_history_page_")) {
+      const page = parseInt(data.split("_").pop());
+      return handleAllTipsHistory(chatId, page, message.message_id);
+    }
+
+    // Ignore “noop” buttons
+    if (data === "noop") {
+      return bot.answerCallbackQuery(query.id, {
+        text: "⏺️ You’re on this page",
+      });
+    }
+  } catch (err) {
+    console.error("callback_query error:", err.message);
+  }
+});
 /**
  * View full details of a specific game from history
  */
@@ -313,19 +426,112 @@ async function getAdminStats() {
 }
 
 // === Handlers: /start and /admin ===
-bot.onText(/\/start/, async (msg) => {
+bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
   const chatId = msg.chat.id;
+  const token = match[1]; // may be undefined
+  const tgIdStr = chatId.toString();
+
   try {
-    const ctx = await ensureUserContext(chatId, msg.from);
+    if (token) {
+      // --- Step 1: Send “Start / Link Account” button ---
+      return await bot.sendMessage(
+        chatId,
+        "👋 Welcome! Click the button below to start and link your account:",
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "🚀 Start / Link Account",
+                  callback_data: `link_start_${token}`,
+                },
+              ],
+            ],
+          },
+        }
+      );
+    }
+
+    // --- Normal start without token ---
+    let ctx = userContext.get(chatId);
+    if (!ctx) {
+      const user = await User.findOne({ telegramId: tgIdStr });
+      if (user) {
+        ctx = {
+          userId: user._id,
+          balance: user.availableBalance,
+          telegramId: tgIdStr,
+        };
+        userContext.set(chatId, ctx);
+      } else {
+        ctx = await ensureUserContext(chatId, msg.from);
+      }
+    }
+
     await sendMainMenu(chatId, ctx.userId, msg.from.first_name);
   } catch (err) {
-    await bot.sendMessage(
-      chatId,
-      "❌ Could not complete startup. Please try again later."
-    );
+    console.error("Error in /start handler:", err);
+    await bot.sendMessage(chatId, "❌ Something went wrong. Please try again.");
   }
 });
 
+// --- Handle the “Start / Link Account” button ---
+bot.on("callback_query", async (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
+
+  if (data.startsWith("link_start_")) {
+    const token = data.replace("link_start_", "");
+    const linkToken = await LinkToken.findOne({ token, used: false });
+    if (!linkToken) {
+      return bot.answerCallbackQuery(query.id, {
+        text: "❌ This link is invalid or expired.",
+        show_alert: true,
+      });
+    }
+
+    const user = await User.findById(linkToken.userId);
+    if (!user)
+      return bot.answerCallbackQuery(query.id, {
+        text: "❌ User not found.",
+        show_alert: true,
+      });
+
+    user.telegramId = chatId.toString();
+    await user.save();
+
+    linkToken.used = true;
+    await linkToken.save();
+
+    userContext.set(chatId, {
+      userId: user._id,
+      balance: user.availableBalance,
+      telegramId: chatId.toString(),
+    });
+
+    await bot.editMessageText(
+      `✅ Telegram successfully linked!\n\nWebsite username: ${user.userName}\nEmail: ${user.email}`,
+      {
+        chat_id: chatId,
+        message_id: query.message.message_id,
+      }
+    );
+
+    // Show main menu after linking
+    await sendMainMenu(chatId, user._id, user.userName);
+  }
+});
+
+bot.onText(/\/connect/, async (msg) => {
+  const chatId = msg.chat.id;
+  const token = crypto.randomBytes(16).toString("hex");
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+
+  await LinkToken.create({ token, telegramId: chatId, expiresAt });
+
+  const loginUrl = `${process.env.API}/telegram-login?token=${token}`;
+  await bot.sendMessage(chatId, `Click to login to website: ${loginUrl}`);
+});
 bot.onText(/\/admin/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -460,6 +666,19 @@ Select your payment method:
         );
       }
     }
+    if (data.startsWith("updateTime_")) {
+      const gameId = data.split("_")[1];
+
+      // Ask the admin for the new duration
+      await bot.sendMessage(chatId, "⏰ Enter new duration (in minutes):");
+
+      // Save session to know which game to update
+      chatSessions[chatId] = { gameId, step: "updating_duration" };
+
+      // ✅ Use query.id here
+      await bot.answerCallbackQuery(query.id);
+    }
+
     if (data.startsWith("deposit_crypto_")) {
       const userId = data.split("_")[2];
 
@@ -478,40 +697,118 @@ After entering the amount you will be redirected to choose cryptocurrency in Oxa
       await bot.sendMessage(chatId, messageText, { parse_mode: "Markdown" });
     }
 
+    // Step 1: User selects to deposit stars
     if (data.startsWith("deposit_stars_")) {
       const userId = data.split("_")[2];
-      // Handle Telegram Stars payment
-      bot.sendMessage(
+      sessions[chatId] = { userId, step: "awaiting_stars_amount" };
+
+      await bot.sendMessage(
         chatId,
-        "⭐ Coming soon: Telegram Stars payment integration!"
+        `
+⭐️ *Add Funds - Telegram Stars*
+
+💵 Enter the amount you'd like to add (minimum $50):
+
+💡 *Stars Conversion*
+- $50 = 3846 stars  
+- $100 = 7691 stars  
+
+Example: \`100\`
+      `,
+        { parse_mode: "Markdown" }
       );
     }
+
+    // Step 2: Confirm payment
+    if (data.startsWith("confirm_stars_")) {
+      const userId = data.split("_")[2];
+      const session = sessions[chatId];
+
+      if (!session || session.userId !== userId) {
+        return bot.sendMessage(chatId, "⚠️ Session expired or invalid.");
+      }
+
+      try {
+        await bot.sendInvoice(
+          chatId,
+          "Add Funds - Telegram Stars",
+          `Deposit $${session.amount} into your account.`,
+          `stars_deposit_${userId}_${Date.now()}`,
+          "", // provider_token empty
+          "XTR", // currency: Stars
+          [{ label: `Deposit $${session.amount}`, amount: session.stars }]
+        );
+      } catch (err) {
+        console.error("❌ Error sending invoice:", err.message);
+        await bot.sendMessage(
+          chatId,
+          "❌ Failed to create Stars payment invoice."
+        );
+      }
+    }
+
     if (data.startsWith("check_crypto_")) {
       const orderId = data.split("_")[2];
+
       try {
+        await bot.sendMessage(chatId, "⏳ Checking your payment status...");
+
         const res = await axios.get(
           `${BACKEND_URL}/api/payment/check-status/${orderId}`
         );
-        const status = res.data?.status;
+        const status = res.data?.status?.toLowerCase();
 
-        if (status === "paid" || status === "completed") {
+        if (
+          status === "paid" ||
+          status === "completed" ||
+          status === "success"
+        ) {
+          // Confirmed ✅
           await bot.sendMessage(
             chatId,
-            "✅ *Payment confirmed!* Your balance will be updated shortly.",
-            {
-              parse_mode: "Markdown",
-            }
+            "✅ *Payment confirmed!* Your balance has been updated successfully.",
+            { parse_mode: "Markdown" }
           );
+
+          // Update session & cleanup
           delete sessions[chatId];
-        } else {
+
+          // Optionally refresh user data (if backend supports it)
+          try {
+            const userRes = await axios.get(
+              `${BACKEND_URL}/api/user/${orderId.split("_")[1]}`
+            );
+            const newBalance = userRes.data?.availableBalance;
+            if (newBalance) {
+              await bot.sendMessage(
+                chatId,
+                `💰 *Your new balance:* $${newBalance}`,
+                { parse_mode: "Markdown" }
+              );
+            }
+          } catch (err2) {
+            console.warn("⚠️ Couldn't fetch updated balance:", err2.message);
+          }
+        } else if (status === "pending" || status === "waiting") {
+          // Not yet confirmed — simulate polling message
           await bot.sendMessage(
             chatId,
-            "⌛ Payment not yet confirmed. Please wait and click 'Check Payment' again."
+            "⌛ Payment not yet confirmed. Please wait a few minutes and click *Check Payment* again.",
+            { parse_mode: "Markdown" }
+          );
+        } else {
+          // Unexpected / failed
+          await bot.sendMessage(
+            chatId,
+            "⚠️ Payment not found or failed. Please contact support if you already paid."
           );
         }
       } catch (err) {
         console.error("Check payment error:", err.message);
-        await bot.sendMessage(chatId, "⚠️ Failed to check payment status.");
+        await bot.sendMessage(
+          chatId,
+          "⚠️ Failed to check payment status. Please try again later."
+        );
       }
     }
 
@@ -820,17 +1117,65 @@ ${progressText}
       await handleNotifyBuyers(chatId, gameId);
       return;
     }
-    if (data.startsWith("select_user_")) {
-      const userId = data.replace("select_user_", "");
-      sessions[chatId] = { step: "add_balance", userId };
-      return bot.sendMessage(chatId, "💰 Enter amount to add to this user:");
-    }
+
+    // When admin selects a user from the list
 
     // balance show
     if (data.startsWith("balance_")) {
       const userId = data.split("_")[1];
       return handleShowBalance(chatId, userId);
     }
+    if (data.startsWith("select_user_")) {
+      const userId = data.replace("select_user_", "");
+      sessions[chatId] = { flow: "add_balance", step: 1, userId };
+
+      try {
+        const response = await axios.get(
+          `${BACKEND_URL}/api/auth/getUser/${userId}`
+        );
+        const userData = response.data;
+        const user =
+          userData?.user ||
+          userData?.data?.user ||
+          userData?.data ||
+          userData ||
+          {};
+
+        const s = sessions[chatId];
+        s.userData = user;
+        s.step = 2;
+
+        const cancelButton = {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Cancel", callback_data: "admin_panel" }],
+            ],
+          },
+        };
+
+        const message = `
+💰 *Add balance to user*
+
+👤 *User:* ${user.userName || "Unknown"} (@${user.userName || "N/A"})
+💳 *Current balance:* $${Number(user.availableBalance || 0).toFixed(2)}
+
+💵 *Enter amount to add (in USD):*
+`;
+
+        return bot.sendMessage(chatId, message, {
+          parse_mode: "Markdown",
+          ...cancelButton,
+        });
+      } catch (err) {
+        console.error(
+          "Error fetching user info:",
+          err.response?.data || err.message
+        );
+        return bot.sendMessage(chatId, "⚠️ Failed to load user details.");
+      }
+    }
+
+    // When admin clicks "Add Balance"
     if (data === "add_balance") {
       try {
         const res = await axios.get(`${BACKEND_URL}/api/auth/getUsers`);
@@ -857,6 +1202,93 @@ ${progressText}
         console.error("Error fetching users:", err.message);
         await bot.sendMessage(chatId, "⚠️ Failed to fetch user list.");
       }
+    }
+    if (data.startsWith("confirm_add_balance_")) {
+      const userId = data.replace("confirm_add_balance_", "");
+      const s = sessions[chatId];
+
+      if (!s || s.userId !== userId) {
+        return bot.sendMessage(chatId, "⚠️ Session expired or invalid.");
+      }
+
+      try {
+        // fetch response (raw)
+        const { data: resp } = await axios.get(
+          `${BACKEND_URL}/api/auth/getUser/${userId}`
+        );
+
+        // normalize to the actual user object no matter the response shape
+        const userObj = resp?.user ?? resp?.data ?? resp;
+
+        console.log("🔍 getUser response:", JSON.stringify(resp)); // debug - remove in prod
+        console.log("🔍 resolved userObj:", JSON.stringify(userObj));
+
+        // extract telegram id from the actual user object
+        const userTelegramId = userObj?.telegramId
+          ? Number(userObj.telegramId)
+          : null;
+
+        // Update balance in backend
+        await axios.post(`${BACKEND_URL}/api/auth/deposit`, {
+          userId: s.userId,
+          amount: s.amount,
+        });
+
+        // Notify admin
+        await bot.sendMessage(
+          chatId,
+          `✅ Successfully added *$${s.amount.toFixed(2)}* to *${
+            s.userData?.name || userObj.userName || "the user"
+          }*'s account.`,
+          { parse_mode: "Markdown" }
+        );
+
+        // Notify user
+        if (userTelegramId) {
+          const mainMenuBtn = {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "🏠 Main Menu", callback_data: "main_menu" }],
+              ],
+            },
+          };
+
+          await bot.sendMessage(
+            userTelegramId,
+            `
+💸 *Balance Update*
+
+🎉 *Good news!*  
+An amount of *$${s.amount.toFixed(2)}* has been added to your account.
+
+💳 *New Balance:* will update on your next refresh.
+
+🕐 You can now continue using your account.
+        `,
+            { parse_mode: "Markdown", ...mainMenuBtn }
+          );
+
+          console.log(
+            `✅ Notified user ${
+              userObj.userName || userId
+            } (Telegram ID: ${userTelegramId})`
+          );
+        } else {
+          console.log(
+            `⚠️ No telegramId found for user ${userObj.userName || userId} (${
+              userObj.telegramId ?? "none"
+            })`
+          );
+        }
+      } catch (err) {
+        console.error(
+          "❌ Error adding balance:",
+          err.response?.data || err.message
+        );
+        await bot.sendMessage(chatId, "❌ Failed to update balance.");
+      }
+
+      delete sessions[chatId];
     }
 
     // back navigation
@@ -1351,7 +1783,6 @@ async function handleToggleTip(chatId, gameId) {
     await bot.sendMessage(chatId, `✅ ${res.data.message || "Tip toggled"}`);
   } catch (err) {
     console.error("handleToggleTip error:", err.message || err);
-    await bot.sendMessage(chatId, "⚠️ Failed to toggle tip status.");
   }
 }
 
@@ -1533,40 +1964,106 @@ ${escapeHTML(purchasedGame.contentAfterPurchase)}
 }
 
 // Escape helper (HTML safe)
-
 // === Message handler for sessions (broadcast, add_balance, add_game flow) ===
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
+  if (!text || text.startsWith("/")) return; // ignore commands
 
-  // ignore commands here
-  if (!text || text.startsWith("/")) return;
-
-  const session = sessions[chatId];
+  const session = chatSessions[chatId] || sessions[chatId];
   if (!session) return;
 
   try {
-    if (!session || session.step !== "crypto_deposit") return;
+    if (session.step === "updating_duration") {
+      const newDuration = parseInt(text);
+      if (isNaN(newDuration) || newDuration <= 0) {
+        return bot.sendMessage(
+          chatId,
+          "⚠️ Please enter a valid number for duration."
+        );
+      }
 
-    const amount = parseFloat(text);
-    if (isNaN(amount) || amount < 50) {
-      return bot.sendMessage(
-        chatId,
-        "❌ Invalid amount. Minimum deposit is *$50.* Please try again.",
-        { parse_mode: "Markdown" }
-      );
+      try {
+        await axios.post(
+          `${BACKEND_URL}/api/games/update-duration/${session.gameId}`,
+          { duration: newDuration }
+        );
+
+        await bot.sendMessage(
+          chatId,
+          `✅ Duration updated to ${newDuration} minutes.`
+        );
+      } catch (err) {
+        console.error(err.response?.data || err.message);
+        await bot.sendMessage(chatId, "❌ Failed to update duration.");
+      }
+
+      // Clear session
+      delete chatSessions[chatId];
     }
 
-    // Generate a temporary transaction ID (no API yet)
-    const transactionId = `crypto_${session.userId}_${Date.now()}`;
-    sessions[chatId] = {
-      step: "crypto_pending_confirmation",
-      userId: session.userId,
-      amount,
-      transactionId,
-    };
+    if (session.step === "awaiting_stars_amount") {
+      const amount = parseFloat(text);
+      if (isNaN(amount) || amount < 50) {
+        return bot.sendMessage(
+          chatId,
+          "⚠️ Please enter a valid amount (minimum $50)."
+        );
+      }
 
-    const messageText = `
+      // Convert USD to Stars
+      const stars = Math.round((amount / 50) * 3846);
+      session.amount = amount;
+      session.stars = stars;
+      session.step = "awaiting_stars_confirmation";
+
+      const confirmButtons = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: `✅ Pay ${stars} Stars ($${amount})`,
+                callback_data: `confirm_stars_${session.userId}`,
+              },
+            ],
+            [{ text: "❌ Cancel", callback_data: "cancel_stars" }],
+          ],
+        },
+      };
+
+      await bot.sendMessage(
+        chatId,
+        `
+💫 *Add Funds Confirmation*
+
+Add *$${amount.toFixed(2)}* to your balance  
+(using *${stars} stars*).
+
+Click below to complete payment:
+      `,
+        { parse_mode: "Markdown", ...confirmButtons }
+      );
+    }
+    // === 💰 CRYPTO DEPOSIT FLOW ===
+    if (session.step === "crypto_deposit") {
+      const amount = parseFloat(text);
+      if (isNaN(amount) || amount < 50) {
+        return bot.sendMessage(
+          chatId,
+          "❌ Invalid amount. Minimum deposit is *$50.* Please try again.",
+          { parse_mode: "Markdown" }
+        );
+      }
+
+      const transactionId = `crypto_${session.userId}_${Date.now()}`;
+      sessions[chatId] = {
+        step: "crypto_pending_confirmation",
+        userId: session.userId,
+        amount,
+        transactionId,
+      };
+
+      const messageText = `
 💰 *Crypto Payment - $${amount.toFixed(2)}*
 
 🆔 *Transaction ID:* \`${transactionId}\`
@@ -1581,59 +2078,132 @@ bot.on("message", async (msg) => {
 ⚠️ *Important:* Don't close this message until payment is completed!
 `;
 
-    const inlineKeyboard = {
-      inline_keyboard: [
-        [
-          {
-            text: "💠 Pay Now",
-            callback_data: `crypto_paynow_${transactionId}`,
-          },
+      const inlineKeyboard = {
+        inline_keyboard: [
+          [
+            {
+              text: "💠 Pay Now",
+              callback_data: `crypto_paynow_${transactionId}`,
+            },
+          ],
+          [{ text: "❌ Cancel", callback_data: "main_menu" }],
         ],
-        [{ text: "❌ Cancel", callback_data: "main_menu" }],
-      ],
-    };
+      };
 
-    await bot.sendMessage(chatId, messageText, {
-      parse_mode: "Markdown",
-      reply_markup: inlineKeyboard,
-    });
+      await bot.sendMessage(chatId, messageText, {
+        parse_mode: "Markdown",
+        reply_markup: inlineKeyboard,
+      });
 
-    // Broadcast
+      return; // ✅ stop here (don’t continue to other flows)
+    }
+
+    if (session.flow === "add_balance") {
+      const s = session;
+
+      const cancelButton = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Cancel", callback_data: "admin_panel" }],
+          ],
+        },
+      };
+
+      switch (s.step) {
+        case 1: {
+          // Fetch user info
+          const { data } = await axios.get(
+            `${BACKEND_URL}/api/auth/getUser/${s.userId}`
+          );
+          const user = data.user;
+          s.userData = user;
+          s.step = 2;
+
+          const message = `
+💰 *Add balance to user*
+
+👤 *User:* ${user.name || "Unknown"} (@${user.username || "N/A"})
+💳 *Current balance:* $${Number(user.availableBalance || 0).toFixed(2)}
+
+💵 *Enter amount to add (in USD):*
+`;
+
+          return bot.sendMessage(chatId, message, {
+            parse_mode: "Markdown",
+            ...cancelButton,
+          });
+        }
+
+        case 2: {
+          const amount = parseFloat(text.replace(/[^0-9.]/g, ""));
+          if (isNaN(amount) || amount <= 0) {
+            return bot.sendMessage(
+              chatId,
+              "❌ Invalid amount. Enter a positive number.",
+              cancelButton
+            );
+          }
+
+          s.amount = amount;
+          s.step = 3;
+
+          const newBalance = (Number(s.userData.balance || 0) + amount).toFixed(
+            2
+          );
+
+          const confirmText = `
+⚠️ *Confirm Balance Addition*
+
+👤 *User:* ${s.userData.name || "Unknown"} (@${s.userData.username || "N/A"})
+💰 *Amount to add:* $${amount.toFixed(2)}
+💳 *Current balance:* $${Number(s.userData.balance || 0).toFixed(2)}
+📄 *Balance after addition:* $${newBalance}
+
+❓ Are you sure you want to add this balance?
+`;
+
+          const confirmKeyboard = {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "✅ Confirm",
+                    callback_data: `confirm_add_balance_${s.userId}`,
+                  },
+                  { text: "❌ Cancel", callback_data: "admin_panel" },
+                ],
+              ],
+            },
+          };
+
+          return bot.sendMessage(chatId, confirmText, {
+            parse_mode: "Markdown",
+            ...confirmKeyboard,
+          });
+        }
+      }
+    }
+    // === 📢 BROADCAST FLOW ===
     if (session.step === "broadcast") {
       await bot.sendMessage(chatId, "📤 Broadcasting message...");
       const { data } = await apiGet("/api/auth/getUsers");
       const users = data.users || [];
+
       for (const u of users) {
         try {
           await bot.sendMessage(u.telegramId || ADMIN_ID, text);
         } catch (e) {
-          /* ignore individual failures */
+          /* ignore failures */
         }
       }
+
       await bot.sendMessage(chatId, "✅ Broadcast complete!");
       delete sessions[chatId];
       return;
     }
 
-    // Add Balance (admin selected user)
-    if (session.step === "add_balance") {
-      const amount = parseFloat(text.replace(/[^0-9.]/g, ""));
-      if (isNaN(amount) || amount <= 0)
-        return bot.sendMessage(
-          chatId,
-          "❌ Invalid amount. Enter a positive number."
-        );
-      await apiPost(`/api/auth/deposit`, { userId: session.userId, amount });
-      await bot.sendMessage(
-        chatId,
-        `✅ Added $${amount.toFixed(2)} successfully to user.`
-      );
-      delete sessions[chatId];
-      return;
-    }
-
-    // Add game flow (admin wizard) - simple linear flow
-    if (session.step && session.flow === "add_game") {
+    // === 🎮 ADD GAME FLOW ===
+    if (session.flow === "add_game") {
       const s = session;
 
       // Cancel helper
@@ -1700,7 +2270,7 @@ bot.on("message", async (msg) => {
           s.data.image = text;
           s.step = 5;
 
-          // Send confidence level buttons (1–5 stars)
+          // Confidence level (stars)
           const starsKeyboard = {
             reply_markup: {
               inline_keyboard: [
@@ -1758,10 +2328,9 @@ bot.on("message", async (msg) => {
         case 8:
           s.data.contentAfterPurchase = text;
           s.data.purchaseLimit = s.data.purchaseLimit || 100;
+
           try {
             await apiPost(`/api/games/add`, s.data);
-
-            // ✅ Store the last added game in memory for broadcast use
             global.lastAddedGame = s.data;
 
             await bot.sendMessage(
@@ -1806,40 +2375,45 @@ function startAddGameFlow(chatId) {
   sessions[chatId] = { flow: "add_game", step: 1, data: {} };
   bot.sendMessage(chatId, "🎮 Enter the Game Title:");
 }
-
 // === manage_tips & manage_users implementations (simplified) ===
-
-async function handleManageTips(chatId) {
+const chatSessions = {};
+async function handleManageTips(chatId, showAll = false) {
   try {
     const res = await apiGet("/api/games/allGame");
-    const games = res.data || [];
+    let games = res.data || [];
     if (!games.length) {
-      return bot.sendMessage(chatId, "⚠️ <b>No active tips available.</b>", {
+      return bot.sendMessage(chatId, "⚠️ <b>No tips available.</b>", {
         parse_mode: "HTML",
       });
     }
 
-    let text = "🧾 <b>Manage Active Tips:</b>\n\n";
-    const keyboard = [];
+    // Filter pending if showAll = false
+    if (!showAll) {
+      games = games.filter((g) => g.status === "Pending");
+      if (!games.length) {
+        return bot.sendMessage(chatId, "⚠️ <b>No pending tips.</b>", {
+          parse_mode: "HTML",
+        });
+      }
+    }
 
-    const renderStars = (level) => "⭐".repeat(Number(level) || 0) || "N/A";
+    let text = showAll
+      ? "🧾 <b>All Tips:</b>\n\n"
+      : "🧾 <b>Pending Tips:</b>\n\n";
+
+    const keyboard = [];
 
     for (const g of games) {
       const tipTitle = escapeHTML(g.tipTitle);
       const price = escapeHTML(String(g.tipPrice));
       const purchasedCount = g.purchasedBy ? g.purchasedBy.length : 0;
       const duration = escapeHTML(String(g.duration));
-      const oddRatio = escapeHTML(String(g.oddRatio));
-      const sites = Array.isArray(g.bettingSites)
-        ? escapeHTML(g.bettingSites.join(", "))
-        : escapeHTML(g.bettingSites || "N/A");
       const status = g.active ? "🟢 Active" : "🔴 Inactive";
 
       text += `🏆 <b>${tipTitle}</b>\n`;
-      text += `💵  $${price} | ${purchasedCount} <b>Purchased:</b>\n`;
+      text += `💵 $${price} | ${purchasedCount} <b>Purchased:</b>\n`;
       text += `🕕 <b>Duration:</b> ${duration} mins\n`;
       text += `📊 <b>Status:</b> ${status}\n`;
-
       text += `─────────────────\n`;
 
       keyboard.push([
@@ -1847,7 +2421,19 @@ async function handleManageTips(chatId) {
       ]);
     }
 
+    // Toggle button
+    keyboard.push([
+      {
+        text: showAll ? "⬆️ Show Less" : "⬇️ Show All",
+        callback_data: `toggle_tips`,
+      },
+    ]);
+
+    // Back button
     keyboard.push([{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }]);
+
+    // Save current state
+    chatSessions[chatId] = { showAllTips: showAll };
 
     await bot.sendMessage(chatId, text, {
       parse_mode: "HTML",
@@ -1860,6 +2446,24 @@ async function handleManageTips(chatId) {
     });
   }
 }
+
+// Handle toggle button callback
+bot.on("callback_query", async (callbackQuery) => {
+  const chatId = callbackQuery.message.chat.id;
+  const data = callbackQuery.data;
+
+  if (data === "toggle_tips") {
+    const session = chatSessions[chatId] || { showAllTips: false };
+    const newShowAll = !session.showAllTips;
+
+    // Delete previous message and resend updated list
+    await bot
+      .deleteMessage(chatId, callbackQuery.message.message_id)
+      .catch(() => {});
+    await handleManageTips(chatId, newShowAll);
+    await bot.answerCallbackQuery(callbackQuery.id);
+  }
+});
 
 async function handleTipDetails(chatId, gameId) {
   try {
@@ -1895,7 +2499,7 @@ async function handleTipDetails(chatId, gameId) {
 🎯 *Purchase Limit:* ${escapeMarkdown(selected.purchaseLimit || "∞")}
 ⚙️ *Status:* ${selected.active ? "🟢 Active" : "🔴 Inactive"}
 
-──────────────────────────────
+──────────────
 
 📝 *Full Content:*
 ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
@@ -1911,6 +2515,12 @@ ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
           {
             text: "📢 Notify Buyers",
             callback_data: `notify_${selected._id}`,
+          },
+        ],
+        [
+          {
+            text: "⏰Extend time",
+            callback_data: `updateTime_${selected._id}`,
           },
         ],
         [
@@ -1940,26 +2550,114 @@ ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
     await bot.sendMessage(chatId, "⚠️ Error fetching tip details.");
   }
 }
+const userPagination = {};
 
-async function handleManageUsers(chatId) {
+async function handleManageUsers(chatId, page = 1, messageId = null) {
   try {
-    const res = await apiGet("/api/auth/getUsers");
-    const users = res.data.users || [];
-    if (!users.length) return bot.sendMessage(chatId, "No users found.");
+    // Cache users for current admin
+    if (!userPagination[chatId] || !userPagination[chatId].users) {
+      const res = await apiGet("/api/auth/getUsers");
+      const users = res.data.users || [];
+      if (!users.length) return bot.sendMessage(chatId, "No users found.");
 
-    const summary = `Users: ${users.length}`;
-    const buttons = users.map((u) => [
-      { text: `${u.userName} (${u.email})`, callback_data: `user_${u._id}` },
+      userPagination[chatId] = { users, page: 1 };
+    }
+
+    const { users } = userPagination[chatId];
+    const totalPages = Math.ceil(users.length / 10);
+    const currentPage = Math.min(Math.max(page, 1), totalPages);
+    userPagination[chatId].page = currentPage;
+
+    const start = (currentPage - 1) * 10;
+    const end = start + 10;
+    const pageUsers = users.slice(start, end);
+
+    // Create user buttons (10 per page)
+    const userButtons = pageUsers.map((u) => [
+      {
+        text: `${u.userName || "Unknown"} (${u.email || "no email"})`,
+        callback_data: `user_${u._id}`,
+      },
     ]);
-    await bot.sendMessage(chatId, summary);
-    await bot.sendMessage(chatId, "Select a user:", {
-      reply_markup: { inline_keyboard: buttons },
-    });
+
+    // Pagination control buttons (3 in one row)
+    const paginationRow = [
+      {
+        text: "⬅️ Prev",
+        callback_data:
+          currentPage > 1 ? `manage_users_page_${currentPage - 1}` : "noop",
+      },
+      {
+        text: `📄 ${currentPage}/${totalPages}`,
+        callback_data: "noop",
+      },
+      {
+        text: "➡️ Next",
+        callback_data:
+          currentPage < totalPages
+            ? `manage_users_page_${currentPage + 1}`
+            : "noop",
+      },
+    ];
+
+    const inlineKeyboard = [...userButtons, paginationRow];
+
+    const summary = `👥 *Users:* ${users.length}\n📄 *Page:* ${currentPage}/${totalPages}`;
+
+    // If editing an existing message, update it smoothly
+    if (messageId) {
+      await bot.editMessageText(summary, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
+    } else {
+      await bot.sendMessage(chatId, summary, {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
+    }
   } catch (err) {
     console.error("handleManageUsers error:", err.message || err);
     await bot.sendMessage(chatId, "⚠️ Failed to fetch users.");
   }
 }
+
+// Handle button clicks
+bot.on("callback_query", async (query) => {
+  const { data, message } = query;
+  const chatId = message.chat.id;
+
+  try {
+    // Handle pagination buttons
+    if (data.startsWith("manage_users_page_")) {
+      const page = parseInt(data.split("_").pop());
+      return handleManageUsers(chatId, page, message.message_id);
+    }
+
+    // Ignore 'noop' clicks
+    if (data === "noop") {
+      return bot.answerCallbackQuery(query.id, {
+        text: "⏺️ This is current page",
+      });
+    }
+
+    // Handle user selection
+    if (data.startsWith("user_")) {
+      const userId = data.split("_")[1];
+      await bot.sendMessage(chatId, `ℹ️ Selected user ID: *${userId}*`, {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+  } catch (err) {
+    console.error("callback_query error:", err.message);
+    if (!err.response?.description?.includes("query is too old")) {
+      await bot.sendMessage(chatId, "⚠️ Error processing your request.");
+    }
+  }
+});
 
 // === user selector and actions ===
 bot.on("callback_query", async (query) => {
@@ -2030,16 +2728,16 @@ bot.on("callback_query", async (query) => {
       };
       // 🔥 Safe message for MarkdownV2
       const message = `🎯 *New Game Alert\\!* 🎯
-──────────────────────────────
+──────────────
 🏆 *Title:* ${escapeMarkdownV2(game.tipTitle)}
 💰 *Price:* \\$${escapeMarkdownV2(String(game.tipPrice))}
 📊 *Odd:* ${escapeMarkdownV2(String(game.oddRatio))}
 🔥 *Confidence:* ${renderStars(game.confidenceLevel) || "N/A"}
-──────────────────────────────
+──────────────
 🧠 *Summary:* ${escapeMarkdownV2(
         game.shortDescription || "New tip available now!"
       )}
-──────────────────────────────
+──────────────
 👉 *Check it now in the /tips section\\!*`;
 
       await bot.sendMessage(chatId, "📢 Broadcasting new game to all users...");

@@ -8,6 +8,8 @@ const passport = require("passport");
 const crypto = require("crypto");
 const Token = require("../models/Token");
 const axios = require("axios");
+const LinkToken = require("./LinkToken");
+const { default: mongoose } = require("mongoose");
 router.get("/", async (req, res) => {
   res.send({ msg: "connected" });
 });
@@ -33,14 +35,19 @@ router.get(
 
 // =============== SIGNUP ===============
 router.post("/signup", async (req, res) => {
-  const { userName, email, password } = req.body;
+  const { userName, email, password, telegramId } = req.body;
   try {
     const existingUser = await User.findOne({ email });
     if (existingUser)
       return res.status(400).json({ message: "User already exists, Login" });
 
     const hashedPassword = await bcrypt.hash(password, 12);
-    const newUser = new User({ email, password: hashedPassword, userName });
+    const newUser = new User({
+      email,
+      password: hashedPassword,
+      userName,
+      telegramId: "",
+    });
     await newUser.save();
     res.status(201).json({ message: "User created successfully", newUser });
   } catch (error) {
@@ -51,7 +58,7 @@ router.post("/signup", async (req, res) => {
 // =============== LOGIN ===============
 // =============== LOGIN ===============
 router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, telegramId } = req.body;
   try {
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "User not found" });
@@ -72,7 +79,75 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ message: "Error logging in" });
   }
 });
+// GET /login/telegram?token=xyz
+router.get("/login/telegram", async (req, res) => {
+  const { token } = req.query;
 
+  try {
+    const linkToken = await LinkToken.findOne({ token, used: false });
+    if (!linkToken || linkToken.expiresAt < Date.now()) {
+      return res.status(400).send("❌ Link expired or invalid");
+    }
+
+    const user = await User.findById(linkToken.userId);
+    if (!user) return res.status(400).send("❌ User not found");
+
+    // Mark token as used
+    linkToken.used = true;
+    await linkToken.save();
+
+    // Generate JWT for website
+    const jwtToken = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+      expiresIn: "1h",
+    });
+
+    // Redirect to website frontend with JWT
+    res.redirect(`${process.env.API}/?telegramToken=${jwtToken}`);
+  } catch (err) {
+    console.error("Telegram login error:", err);
+    res.status(500).send("❌ Something went wrong");
+  }
+});
+
+router.post("/connect/telegram", async (req, res) => {
+  const { userId } = req.body;
+
+  console.log("[Connect Telegram] Called with userId:", userId);
+
+  try {
+    // 1️⃣ Validate userId
+    if (!userId) {
+      return res.status(400).json({ message: "Missing userId in request" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ message: "Invalid userId" });
+    }
+
+    // 2️⃣ Check if user exists
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // 3️⃣ Generate one-time token
+    const token = Math.random().toString(36).substr(2, 10) + Date.now();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    // 4️⃣ Save token in DB
+    const linkToken = await LinkToken.create({ token, userId, expiresAt });
+    console.log("[Connect Telegram] LinkToken created:", linkToken);
+
+    // 5️⃣ Return Telegram deep link
+    const deepLink = `https://t.me/${process.env.TELEGRAM_BOT_USERNAME}?start=${token}`;
+    return res.json({ deepLink });
+  } catch (err) {
+    console.error("[Connect Telegram] Error:", err);
+    return res.status(500).json({
+      message: "Failed to generate Telegram link",
+      error: err.message,
+    });
+  }
+});
 // =============== DEACTIVATE USER ===============
 router.put("/deactivateUser/:id", async (req, res) => {
   const { id } = req.params;
@@ -255,12 +330,31 @@ router.put("/updateUserRole/:id", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+router.get("/telegram-login", async (req, res) => {
+  const { token } = req.query;
+  const link = await LinkToken.findOne({ token, used: false });
+
+  if (!link || link.expiresAt < new Date())
+    return res.status(400).send("Invalid or expired token");
+
+  const user = await User.findOne({ telegramId: link.telegramId });
+  if (!user) return res.status(404).send("User not found");
+
+  const jwtToken = jwt.sign({ userId: user._id }, "secretKey", {
+    expiresIn: "1h",
+  });
+  link.used = true;
+  await link.save();
+
+  // Redirect to frontend with token
+  res.redirect(`https://yourfrontend.com?token=${jwtToken}`);
+});
 
 // Get single user by ID
 router.get("/getUser/:id", async (req, res) => {
   try {
     const user = await User.findById(req.params.id).select(
-      "userName email availableBalance role"
+      "userName email availableBalance role telegramId"
     );
     if (!user) return res.status(404).json({ message: "User not found" });
     res.json({ success: true, user });
@@ -269,6 +363,7 @@ router.get("/getUser/:id", async (req, res) => {
     res.status(500).json({ success: false, message: "Error fetching user" });
   }
 });
+
 // Telegram Signup Route
 router.post("/telegram-signup", async (req, res) => {
   try {

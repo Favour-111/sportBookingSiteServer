@@ -208,7 +208,29 @@ router.put("/:id/buy", async (req, res) => {
     res.status(500).json({ message: "Error processing purchase" });
   }
 });
+router.post("/update-duration/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { duration } = req.body;
 
+    if (!duration || isNaN(duration)) {
+      return res.status(400).json({ message: "Invalid duration value." });
+    }
+
+    const game = await Game.findById(id);
+    if (!game) {
+      return res.status(404).json({ message: "Game not found." });
+    }
+
+    game.duration = duration;
+    await game.save();
+
+    res.json({ message: "Duration updated successfully.", game });
+  } catch (err) {
+    console.error("Error updating duration:", err);
+    res.status(500).json({ message: "Server error." });
+  }
+});
 // ---------------- UPDATE GAME STATUS ----------------
 router.put("/updategameStatus/:gameId", async (req, res) => {
   const { gameId } = req.params;
