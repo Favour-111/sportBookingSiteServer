@@ -1795,7 +1795,7 @@ async function handleShowBalance(chatId, userId) {
     const keyboard = {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "💳 Add Funds", callback_data: `deposit_${userId}` }],
+          [{ text: "💳 Add Funds", callback_data: `deposit` }],
           [{ text: "⬅ Back", callback_data: `main_menu` }],
         ],
       },
@@ -2026,7 +2026,7 @@ bot.on("message", async (msg) => {
                 callback_data: `confirm_stars_${session.userId}`,
               },
             ],
-            [{ text: "❌ Cancel", callback_data: "cancel_stars" }],
+            [{ text: "❌ Cancel", callback_data: "admin_panel" }],
           ],
         },
       };
@@ -2118,6 +2118,7 @@ Click below to complete payment:
           const user = data.user;
           s.userData = user;
           s.step = 2;
+          sessions[chatId] = s;
 
           const message = `
 💰 *Add balance to user*
