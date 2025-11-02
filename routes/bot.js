@@ -937,28 +937,125 @@ Example: \`100\`
       const [_, gameId, status] = data.split("_");
 
       try {
-        const res = await apiPut(`/api/games/updategameStatus/${gameId}`, {
+        // 1️⃣ Update the game status in the backend
+        await apiPut(`/api/games/updategameStatus/${gameId}`, {
           gameStatus: status,
         });
 
-        const msg = res.data?.message || "✅ Status updated successfully!";
-        await bot.sendMessage(
-          chatId,
-          `✅ *${status}* set for game!\n\n${msg}`,
-          {
-            parse_mode: "Markdown",
+        // 2️⃣ Confirm to admin
+        await bot.sendMessage(chatId, `✅ *${status}* set for this game!`, {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
+            ],
+          },
+        });
+
+        // 3️⃣ Fetch the updated game
+        const gameRes = await apiGet(`/api/games/${gameId}`);
+        const game = gameRes.data;
+
+        if (!game?.purchasedBy?.length) {
+          console.log(`ℹ️ No buyers for ${game.tipTitle}`);
+          return;
+        }
+
+        // 4️⃣ Fetch all users
+        const userRes = await apiGet(`/api/auth/getUsers`);
+        const allUsers = userRes.data.users || [];
+
+        // 5️⃣ Match buyers
+        const buyers = game.purchasedBy
+          .map((buyerId) =>
+            allUsers.find((u) => String(u._id) === String(buyerId))
+          )
+          .filter(Boolean);
+
+        if (!buyers.length) {
+          console.log("⚠️ No valid buyers with Telegram IDs found.");
+          return;
+        }
+
+        // 6️⃣ Build result message
+        let resultMessage = "";
+        if (status === "Hit✅" || status === "Won") {
+          resultMessage = `
+🎉 *Your tip was a hit!*  
+
+🏆 Tip: ${game.tipTitle || "Unknown Tip"}  
+📊 Odds ratio: ${game.oddRatio || "N/A"}  
+💰 Price: $${game.tipPrice || "N/A"}  
+
+🎯 Result: ✅ *Won*  
+
+🎉 Congratulations! Want more winning tips?`;
+        } else if (status === "Miss❌" || status === "Lost") {
+          resultMessage = `
+😔 *Result update*  
+
+🏆 Tip: ${game.tipTitle || "Unknown Tip"}  
+📊 Odds ratio: ${game.oddRatio || "N/A"}  
+💰 Price: $${game.tipPrice || "N/A"}  
+
+🎯 Result: ❌ *Lost*  
+
+📄 Let’s try again with the next tip!`;
+        } else {
+          resultMessage = `
+⏳ *Update: Tip still pending*  
+
+🏆 Tip: ${game.tipTitle || "Unknown Tip"}  
+📊 Odds ratio: ${game.oddRatio || "N/A"}  
+💰 Price: $${game.tipPrice || "N/A"}  
+
+🎯 Result: ⏸ *Pending*  
+
+We’ll notify you once results are in.`;
+        }
+
+        // 7️⃣ Send to each buyer
+        let sent = 0;
+        for (const buyer of buyers) {
+          const tgId = buyer.telegramId || buyer.chatId;
+          if (!tgId) continue;
+
+          // ✅ build keyboard here so buyer._id is available
+          const userKeyboard = {
             reply_markup: {
               inline_keyboard: [
-                [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
+                [
+                  { text: "🎯 View Tips", callback_data: "tips" },
+                  {
+                    text: "💰 View Balance",
+                    callback_data: `balance_${buyer._id}`,
+                  },
+                ],
               ],
             },
+            parse_mode: "Markdown",
+          };
+
+          try {
+            await bot.sendMessage(Number(tgId), resultMessage, userKeyboard);
+            sent++;
+            console.log(`✅ Sent to ${buyer.userName || tgId}`);
+          } catch (err) {
+            console.warn(
+              `❌ Failed to send to ${buyer.userName || tgId}: ${err.message}`
+            );
           }
-        );
+
+          await new Promise((r) => setTimeout(r, 300)); // avoid flood limits
+        }
+
+        console.log(`✅ Sent updates to ${sent}/${buyers.length} buyers.`);
       } catch (err) {
-        const msg =
-          err.response?.data?.message ||
-          "⚠️ Could not update status. Try again later.";
-        await bot.sendMessage(chatId, msg);
+        console.error("⚠️ Error in status_ handler:", err.message);
+        await bot.sendMessage(
+          chatId,
+          "⚠️ Error updating status or notifying users."
+        );
       }
     }
 

@@ -138,7 +138,22 @@ router.put("/:id", async (req, res) => {
     res.status(500).json({ message: "Error updating game" });
   }
 });
+router.get("/:id", async (req, res) => {
+  const { id } = req.params;
 
+  try {
+    const game = await Game.findById(id);
+
+    if (!game) {
+      return res.status(404).json({ message: "Game not found" });
+    }
+
+    res.status(200).json(game);
+  } catch (error) {
+    console.error("Error fetching game:", error);
+    res.status(500).json({ message: "Error fetching game" });
+  }
+});
 // ---------------- TOGGLE ACTIVE ----------------
 router.put("/:id/toggle-active", async (req, res) => {
   const { id } = req.params;
