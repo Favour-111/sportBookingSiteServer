@@ -1029,8 +1029,6 @@ ${progressText}
 
 ℹ Buy Game to unlock Content
 
-💳 *Your balance:* : $0.00
-
 ⚠ *Remember:* Betting is done on betting sites; we only provide recommendations
 `;
       };
@@ -1116,6 +1114,361 @@ ${progressText}
       const gameId = data.split("_")[1];
       await handleNotifyBuyers(chatId, gameId);
       return;
+    }
+    if (data.startsWith("notifyAll_")) {
+      const gameId = data.split("_")[1];
+
+      try {
+        // 1️⃣ Fetch all games and all users
+        const [gameRes, userRes] = await Promise.all([
+          apiGet(`/api/games/allGame`),
+          apiGet(`/api/auth/getUsers`),
+        ]);
+
+        const games = gameRes?.data || [];
+        const allUsers = userRes?.data.users || [];
+
+        // 2️⃣ Find the selected game
+        const game = games.find((g) => String(g._id) === String(gameId));
+        if (!game) {
+          await bot.sendMessage(query.message.chat.id, "⚠️ Game not found.");
+          return;
+        }
+
+        // 3️⃣ Filter Telegram users
+        const telegramUsers = allUsers.filter((u) => u.telegramId || u.chatId);
+        if (telegramUsers.length === 0) {
+          await bot.sendMessage(
+            query.message.chat.id,
+            "⚠️ No Telegram users found."
+          );
+          return;
+        }
+
+        // 4️⃣ Helpers
+        const escapeHtml = (str = "") =>
+          String(str ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+
+        const renderStars = (level) => "⭐".repeat(Number(level) || 0) || "N/A";
+
+        const createdAt = new Date(game.createdAt).getTime();
+        const endTime = createdAt + (game.duration || 0) * 60000;
+
+        // 5️⃣ Build HTML description
+        const buildHtmlDescription = (timeLeftMs) => {
+          const minutesLeft = Math.ceil(timeLeftMs / 60000);
+          const secondsLeft = Math.floor((timeLeftMs % 60000) / 1000);
+          const totalDurationMs = (game.duration || 0) * 60000;
+          const percentLeft =
+            totalDurationMs > 0
+              ? Math.max(Math.min(timeLeftMs / totalDurationMs, 1), 0)
+              : 0;
+          const filledBlocks = Math.round(percentLeft * 10);
+          const progressBar =
+            "█".repeat(filledBlocks) + "▒".repeat(10 - filledBlocks);
+
+          let progressText = "";
+          if (timeLeftMs <= 0) {
+            progressText = "✅ Game finished — results coming soon!";
+          } else if (minutesLeft <= 30) {
+            progressText = `⚠️ ${progressBar} ◒ ${minutesLeft}m (${Math.round(
+              percentLeft * 100
+            )}%) — Ending soon`;
+          } else {
+            progressText = `⌛ ${minutesLeft}m ${secondsLeft}s left`;
+          }
+
+          let resultMessage = "";
+          if (game.status === "Hit" || game.status === "Hit✅") {
+            resultMessage =
+              "✅ <b>Result:</b> Tip HIT! Congratulations to all buyers!";
+          } else if (game.status === "Miss" || game.status === "Miss❌") {
+            resultMessage =
+              "❌ <b>Result:</b> Tip missed this time. Stay tuned!";
+          } else if (
+            game.status === "Pending" ||
+            game.status === "Pending⏳" ||
+            game.active
+          ) {
+            resultMessage =
+              "⏳ <b>Result:</b> Still ongoing — waiting for match completion.";
+          } else {
+            resultMessage = "⚙️ <b>Status:</b> Not available yet.";
+          }
+
+          return `<b>🏆 ${escapeHtml(game.tipTitle || "Untitled Tip")}</b>
+
+<b>💵 Price:</b> $${escapeHtml(game.tipPrice || "0")}
+<b>📈 Odds:</b> ${escapeHtml(game.oddRatio || "N/A")}
+<b>🎯 Confidence:</b> ${renderStars(game.confidenceLevel)}
+
+${resultMessage}
+
+${escapeHtml(progressText)}
+
+<b>🏦 Betting Site:</b> ${escapeHtml(
+            Array.isArray(game.bettingSites)
+              ? game.bettingSites.join(", ")
+              : game.bettingSites || "N/A"
+          )}
+
+ℹ️ <i>Buy game to unlock full tip content.</i>
+⚠️ <i>We only provide predictions — bets are placed on external sites.</i>`;
+        };
+
+        // 6️⃣ Notify all Telegram users
+        let sentCount = 0;
+        let failedUsers = [];
+
+        for (const user of telegramUsers) {
+          const chatId = user.telegramId || user.chatId;
+          if (!chatId) continue;
+
+          const timeLeft = endTime - Date.now();
+          const htmlCaption = buildHtmlDescription(timeLeft);
+          const isPhoto = Boolean(game.image);
+
+          try {
+            const options = {
+              parse_mode: "HTML",
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "💰 Buy Tip Now",
+                      callback_data: `confirmBuy_${game._id}`,
+                    },
+                  ],
+                  [{ text: "⬅️ Back to Tips", callback_data: "tips" }],
+                ],
+              },
+            };
+
+            if (isPhoto) {
+              await bot.sendPhoto(chatId, game.image, {
+                caption:
+                  htmlCaption.length > 1000
+                    ? htmlCaption.slice(0, 1000) + "…"
+                    : htmlCaption,
+                ...options,
+              });
+            } else {
+              await bot.sendMessage(
+                chatId,
+                htmlCaption.length > 4000
+                  ? htmlCaption.slice(0, 4000) + "…"
+                  : htmlCaption,
+                options
+              );
+            }
+
+            sentCount++;
+          } catch (err) {
+            console.warn(
+              `❌ Failed to send to ${user.userName || chatId}:`,
+              err.message
+            );
+
+            // Fallback: send plain text if HTML fails
+            try {
+              const plain = htmlCaption.replace(/<[^>]*>/g, "");
+              await bot.sendMessage(chatId, plain);
+              sentCount++;
+            } catch (fallbackErr) {
+              console.error(
+                `✖️ Final failure for ${user.userName || chatId}:`,
+                fallbackErr.message
+              );
+              failedUsers.push(user.userName || user.email || chatId);
+            }
+          }
+
+          await new Promise((r) => setTimeout(r, 300)); // prevent flood
+        }
+
+        // 7️⃣ Summary message
+        let summary = `✅ Tip broadcasted to ${sentCount}/${telegramUsers.length} users.`;
+        if (failedUsers.length) {
+          summary += `\n\n⚠️ Could not reach:\n${failedUsers
+            .map((u) => `• ${u}`)
+            .join("\n")}`;
+        }
+
+        await bot.sendMessage(query.message.chat.id, summary);
+      } catch (err) {
+        console.error("Error in notifyAll handler:", err);
+        await bot.sendMessage(
+          query.message.chat.id,
+          "⚠️ Error notifying all users."
+        );
+      }
+    }
+
+    if (data.startsWith("notifyBuyers_")) {
+      const gameId = data.split("_")[1];
+
+      try {
+        // 1️⃣ Fetch all games and all users
+        const [gameRes, userRes] = await Promise.all([
+          apiGet(`/api/games/allGame`),
+          apiGet(`/api/auth/getUsers`), // You must have an endpoint that lists all users
+        ]);
+
+        const games = gameRes?.data || [];
+        const allUsers = userRes?.data.users || [];
+
+        // 2️⃣ Find the selected game
+        const selected = games.find((g) => String(g._id) === String(gameId));
+        if (!selected) {
+          return bot.sendMessage(query.message.chat.id, "⚠️ Game not found.");
+        }
+
+        const buyers = selected.purchasedBy || [];
+        if (buyers.length === 0) {
+          return bot.sendMessage(query.message.chat.id, "⚠️ No buyers yet.");
+        }
+
+        // 3️⃣ Join buyers with full user info
+        const fullBuyers = buyers
+          .map((buyerId) =>
+            allUsers.find((u) => String(u._id) === String(buyerId))
+          )
+          .filter(Boolean); // remove nulls
+
+        if (fullBuyers.length === 0) {
+          return bot.sendMessage(
+            query.message.chat.id,
+            "⚠️ No valid buyer records found (users may have been deleted)."
+          );
+        }
+
+        // 4️⃣ Helper to escape Markdown
+        const escapeMarkdown = (text = "") =>
+          String(text ?? "").replace(/([_*[\]()~`>#+\-=|{}.!])/g, "\\$1");
+
+        // 5️⃣ Construct message for buyers
+
+        // 🧩 Build dynamic game result message
+        let resultText = "";
+        let statusEmoji = "";
+
+        if (selected.status === "Hit✅" || selected.status === "Hit") {
+          statusEmoji = "✅";
+          resultText = `
+🎯 *Result:* The tip was a *HIT!* 🥳  
+💰 Congratulations to everyone who trusted this prediction!  
+Stay tuned for more winning tips coming soon. 🚀
+`;
+        } else if (selected.status === "Miss❌" || selected.status === "Miss") {
+          statusEmoji = "❌";
+          resultText = `
+😔 *Result:* Unfortunately, this tip *MISSED*.  
+Remember, even the best strategies have off days — consistency wins in the long run. 💪  
+Next tip might be the winning one! 🔥
+`;
+        } else if (
+          selected.status === "Pending⏳" ||
+          selected.status === "Pending" ||
+          selected.active
+        ) {
+          statusEmoji = "⏳";
+          resultText = `
+⏳ *Result:* The game is *still ongoing.*  
+Please hold tight — final outcome will be shared soon. 🕒
+`;
+        } else {
+          statusEmoji = selected.active ? "🟢" : "🔴";
+          resultText = `
+⚙️ *Status:* ${selected.active ? "Active" : "Inactive"}  
+Stay tuned for updates.
+`;
+        }
+
+        // 🧾 Compose the final message
+        const message = `
+🏆 *${escapeMarkdown(selected.tipTitle || "Untitled Tip")}* ${statusEmoji}
+
+💵 *Price:* $${escapeMarkdown(selected.tipPrice || "0")}
+📈 *Odds:* ${escapeMarkdown(selected.oddRatio || "N/A")}
+🎯 *Confidence:* ${"⭐".repeat(Number(selected.confidenceLevel) || 0)}
+
+──────────────
+🧾 *Full Tip Content:*
+${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
+
+⏱ *Duration:* ${escapeMarkdown(selected.duration || "N/A")} mins
+🏦 *Betting Site:* ${escapeMarkdown(
+          Array.isArray(selected.bettingSites)
+            ? selected.bettingSites.join(", ")
+            : selected.bettingSites || "N/A"
+        )}
+
+${resultText}
+`;
+
+        // 6️⃣ Send message to each buyer
+        let sentCount = 0;
+        let failedUsers = [];
+
+        for (const buyer of fullBuyers) {
+          const chatId = buyer.telegramId || buyer.chatId;
+          if (!chatId) continue;
+
+          try {
+            if (selected.image) {
+              await bot.sendPhoto(chatId, selected.image, {
+                caption: message,
+                parse_mode: "Markdown",
+              });
+            } else {
+              await bot.sendMessage(chatId, message, {
+                parse_mode: "Markdown",
+              });
+            }
+            sentCount++;
+          } catch (err) {
+            if (
+              err.code === "ETELEGRAM" &&
+              err.response?.body?.description?.includes("chat not found")
+            ) {
+              console.warn(
+                `🚫 User ${buyer.userName || chatId} has not started the bot.`
+              );
+              failedUsers.push(buyer.userName || buyer.email || chatId);
+            } else if (err.message.includes("ETIMEDOUT")) {
+              console.warn(`⏳ Timeout sending to ${buyer.userName || chatId}`);
+            } else {
+              console.warn(
+                `❌ Error sending to ${buyer.userName || chatId}: ${
+                  err.message
+                }`
+              );
+            }
+          }
+
+          // prevent Telegram flood error
+          await new Promise((r) => setTimeout(r, 300));
+        }
+
+        // 7️⃣ Send summary back to admin
+        let summaryMsg = `✅ Tip successfully sent to ${sentCount}/${fullBuyers.length} buyers.`;
+        if (failedUsers.length) {
+          summaryMsg += `\n\n⚠️ These users must start the bot first:\n${failedUsers
+            .map((u) => `• ${u}`)
+            .join("\n")}`;
+        }
+
+        await bot.sendMessage(query.message.chat.id, summaryMsg);
+      } catch (err) {
+        console.error("Error in notifyBuyers handler:", err);
+        await bot.sendMessage(
+          query.message.chat.id,
+          "⚠️ Error notifying buyers."
+        );
+      }
     }
 
     // When admin selects a user from the list
@@ -2514,14 +2867,18 @@ ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
             callback_data: `toggle_${selected._id}`,
           },
           {
-            text: "📢 Notify Buyers",
-            callback_data: `notify_${selected._id}`,
+            text: "📢 Notify All ",
+            callback_data: `notifyAll_${selected._id}`,
           },
         ],
         [
           {
             text: "⏰Extend time",
             callback_data: `updateTime_${selected._id}`,
+          },
+          {
+            text: "🏆Notify Buyers",
+            callback_data: `notifyBuyers_${selected._id}`,
           },
         ],
         [
