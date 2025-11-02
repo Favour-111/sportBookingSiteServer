@@ -1865,11 +1865,39 @@ async function handleShowTips(chatId, from) {
     const ctx = await ensureUserContext(chatId, from);
     const userId = ctx.userId;
 
-    // Fetch all active games
+    // 🕒 Fetch all games (active + inactive)
     const res = await apiGet("/api/games/allGame");
-    const games = (res.data || []).filter((g) => g.active);
+    const games = res.data || [];
 
-    if (!games.length) {
+    const now = Date.now();
+
+    // 🧩 Step 1: Auto-deactivate expired games
+    for (const game of games) {
+      if (game.active && game.duration) {
+        const createdAt = new Date(game.createdAt).getTime();
+        const expiryTime = createdAt + Number(game.duration) * 60 * 1000;
+
+        if (now >= expiryTime) {
+          try {
+            await apiPut(`/api/games/${game._id}/toggle-active`);
+            console.log(
+              `⏰ Game "${game.tipTitle}" has expired and was deactivated.`
+            );
+          } catch (err) {
+            console.error(
+              `⚠️ Failed to deactivate expired game ${game._id}:`,
+              err.message
+            );
+          }
+        }
+      }
+    }
+
+    // 🔄 Step 2: Re-fetch all active games (after cleanup)
+    const activeRes = await apiGet("/api/games/allGame");
+    const activeGames = (activeRes.data || []).filter((g) => g.active);
+
+    if (!activeGames.length) {
       return bot.sendMessage(
         chatId,
         "⚠ No active tips available at the moment.",
@@ -1883,7 +1911,7 @@ async function handleShowTips(chatId, from) {
       );
     }
 
-    // Get user data to know which tips they've already bought
+    // 🧠 Step 3: Get user data to know which tips were bought
     const userRes = await apiGet(`/api/auth/getUserById/${userId}`);
     const purchasedGameIds = (userRes.data?.user?.betHistory || []).map((b) =>
       String(b.gameId)
@@ -1896,39 +1924,35 @@ async function handleShowTips(chatId, from) {
 
     let tipsMessage = "🏆 *Available Tips*";
 
-    // Construct message text
-    games.forEach((game) => {
+    // 🧩 Step 4: Build buttons for available games
+    const buttons = activeGames.map((game) => {
       const isBought = purchasedGameIds.includes(String(game._id));
-    });
+      const stars = renderStars(game.confidenceLevel);
 
-    // Build inline keyboard
-    const buttons = games.map((game) => {
-      const isBought = purchasedGameIds.includes(String(game._id));
       if (isBought) {
         return [
           {
-            text: `✅ ${game.tipPrice} - $${game.tipPrice} | Odds: ${game.oddRatio} (Bought)`,
-            callback_data: `view_${game._id}`, // maybe let them view it again
+            text: `✅ ${game.tipTitle} | $${game.tipPrice} | Odds: ${game.oddRatio} (${stars})`,
+            callback_data: `view_${game._id}`,
           },
         ];
       } else {
         return [
           {
-            text: `🏆${game.tipPrice} - $${game.tipPrice} | Odds: ${game.oddRatio}`,
+            text: `🏆 ${game.tipTitle} | $${game.tipPrice} | Odds: ${game.oddRatio} (${stars})`,
             callback_data: `buy_${game._id}`,
           },
         ];
       }
     });
 
-    // Add back button
     buttons.push([
       { text: "⬅️ Back to Main Menu", callback_data: "main_menu" },
     ]);
 
-    // Send message
+    // 📨 Step 5: Send message
     await bot.sendMessage(chatId, tipsMessage, {
-      parse_mode: "MarkdownV2",
+      parse_mode: "Markdown",
       reply_markup: { inline_keyboard: buttons },
     });
   } catch (err) {
@@ -1937,6 +1961,61 @@ async function handleShowTips(chatId, from) {
   }
 }
 
+async function autoDeactivateExpiredGames(bot) {
+  try {
+    const res = await apiGet("/api/games/allGame");
+    const games = res.data || [];
+    const now = Date.now();
+
+    for (const game of games) {
+      if (game.active && game.duration) {
+        const createdAt = new Date(game.createdAt).getTime();
+        const expiryTime = createdAt + Number(game.duration) * 60 * 1000;
+
+        if (now >= expiryTime) {
+          try {
+            // 🛑 Deactivate expired game
+            await apiPut(`/api/games/${game._id}/toggle-active`);
+            console.log(`⏰ Game "${game.tipTitle}" auto-deactivated.`);
+
+            // 📢 Notify admins
+            const msg = `
+⏰ *Game Auto-Deactivated*
+🏆 Title: ${game.tipTitle}
+💰 Price: $${game.tipPrice}
+📊 Odds: ${game.oddRatio}
+🕒 Duration: ${game.duration} mins
+📅 Created: ${new Date(game.createdAt).toLocaleString()}
+
+The game expired and was automatically deactivated.
+            `;
+
+            for (const adminId of ADMIN_IDS) {
+              try {
+                await bot.sendMessage(adminId, msg, { parse_mode: "Markdown" });
+              } catch (err) {
+                console.error(
+                  `⚠️ Failed to notify admin ${adminId}:`,
+                  err.message
+                );
+              }
+            }
+          } catch (err) {
+            console.error(
+              `⚠️ Failed to deactivate game ${game._id}:`,
+              err.message
+            );
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("❌ Auto-expire check failed:", err.message);
+  }
+}
+
+// 🕒 Run every 1 minute
+setInterval(() => autoDeactivateExpiredGames(bot), 60 * 1000);
 async function handlePurchases(chatId, from) {
   try {
     const ctx = await ensureUserContext(chatId, from);
