@@ -355,13 +355,13 @@ Sharing or reposting it may result in restrictions.
 }
 
 // === Main menu sender ===
-async function sendMainMenu(chatId, userId, userName) {
+async function sendMainMenu(chatId, userId, userName, isRetry = false) {
   try {
     const res = await apiGet(`/api/auth/getUserById/${userId}`);
     const user = res.data.user;
-    const balance =
-      (user && Number(user.availableBalance || 0).toFixed(2)) || "0.00";
-    const role = user && user.role ? user.role : "customer";
+
+    const balance = Number(user?.availableBalance || 0).toFixed(2);
+    const role = user?.role || "customer";
 
     const caption = `
 🏆 *Welcome to the Sports Tips System*
@@ -379,7 +379,6 @@ async function sendMainMenu(chatId, userId, userName) {
 💻 Click connect to website below to connect with our website
 `;
 
-    // Buttons
     const buttons = [
       [
         { text: "💰 My Balance", callback_data: `balance_${user._id}` },
@@ -400,15 +399,57 @@ async function sendMainMenu(chatId, userId, userName) {
     if (role === "admin") {
       buttons.push([{ text: "👤 Admin Panel", callback_data: "admin_panel" }]);
     }
+
     await bot.sendPhoto(
       chatId,
       "https://raw.githubusercontent.com/Favour-111/my-asset/main/image.jpg"
     );
+
     await bot.sendMessage(chatId, caption, {
       parse_mode: "Markdown",
       reply_markup: { inline_keyboard: buttons },
     });
   } catch (err) {
+    if (err.response && err.response.status === 404) {
+      console.warn(`User ${userId} not found. Recreating...`);
+
+      // prevent infinite loop
+      if (isRetry) {
+        console.error("Already retried once — stopping loop.");
+        return await bot.sendMessage(
+          chatId,
+          "⚠️ Could not recreate your account. Please try /start again."
+        );
+      }
+
+      try {
+        // Clear any stale context
+        userContext.delete(chatId);
+
+        // Ensure we have a valid new user
+        const newCtx = await ensureUserContext(chatId, {
+          first_name: userName,
+        });
+
+        if (!newCtx || !newCtx.userId) {
+          console.error("ensureUserContext failed to return new userId");
+          return await bot.sendMessage(
+            chatId,
+            "⚠️ Failed to recreate your account. Please try /start again."
+          );
+        }
+
+        // ✅ Retry only once with the new userId
+        return await sendMainMenu(chatId, newCtx.userId, userName, true);
+      } catch (createErr) {
+        console.error("Failed to recreate user:", createErr);
+        return await bot.sendMessage(
+          chatId,
+          "⚠️ Your account was missing and could not be recreated. Please try /start again."
+        );
+      }
+    }
+
     console.error("sendMainMenu error:", err.message || err);
     await bot.sendMessage(chatId, "❌ Failed to load menu. Try /start again.");
   }
@@ -432,8 +473,8 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
   const tgIdStr = chatId.toString();
 
   try {
+    // --- Step 1: Handle token start ---
     if (token) {
-      // --- Step 1: Send “Start / Link Account” button ---
       return await bot.sendMessage(
         chatId,
         "👋 Welcome! Click the button below to start and link your account:",
@@ -452,10 +493,13 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
       );
     }
 
-    // --- Normal start without token ---
+    // --- Step 2: Normal start ---
     let ctx = userContext.get(chatId);
+
+    // Try to load user from context or DB
     if (!ctx) {
       const user = await User.findOne({ telegramId: tgIdStr });
+
       if (user) {
         ctx = {
           userId: user._id,
@@ -464,10 +508,12 @@ bot.onText(/\/start(?: (.+))?/, async (msg, match) => {
         };
         userContext.set(chatId, ctx);
       } else {
+        // User not found — create a new one
         ctx = await ensureUserContext(chatId, msg.from);
       }
     }
 
+    // --- Step 3: Send main menu ---
     await sendMainMenu(chatId, ctx.userId, msg.from.first_name);
   } catch (err) {
     console.error("Error in /start handler:", err);
