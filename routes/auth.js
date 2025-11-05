@@ -469,7 +469,7 @@ router.post("/forgot-password", async (req, res) => {
       html: `
     <div style="font-family: Arial, sans-serif; background-color: #f9f9f9; padding: 20px; max-width: 600px; margin: 0 auto; border-radius: 8px;">
       <h1 style="text-align: center; color: #4b6cb7;">Reset Your Password</h1>
-      <p style="font-size: 16px; color: #555;">Hi ${user.userName},</p>
+      <p style="font-size: 16px; color: #555;">Hi ${user.userName}👋,</p>
       <p style="font-size: 16px; color: #555;">Tap the button below to reset your customer account password. If you didn't request a new password, you can safely delete this email.</p>
       <div style="text-align: center; margin-top: 30px;">
         <a href="${process.env.API}/api/auth/reset-password/${user._id}/${resetToken}" style="background-color: #4b6cb7; color: #ffffff; padding: 14px 25px; text-decoration: none; font-size: 16px; border-radius: 5px; display: inline-block;">Reset Password</a>

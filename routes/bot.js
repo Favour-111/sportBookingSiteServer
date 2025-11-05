@@ -126,7 +126,13 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
     if (!tipsPagination[chatId] || !tipsPagination[chatId].games) {
       const res = await apiGet("/api/games/allGame");
       const games = res.data || [];
-      if (!games.length) {
+
+      // Filter only Hit✅ or Miss❌ games
+      const filteredGames = games.filter(
+        (g) => g.status === "Hit✅" || g.status === "Miss❌"
+      );
+
+      if (!filteredGames.length) {
         return bot.sendMessage(chatId, "📭 <b>No game history found yet.</b>", {
           parse_mode: "HTML",
           reply_markup: {
@@ -137,7 +143,8 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
           },
         });
       }
-      tipsPagination[chatId] = { games, page: 1 };
+
+      tipsPagination[chatId] = { games: filteredGames, page: 1 };
     }
 
     const { games } = tipsPagination[chatId];
@@ -151,17 +158,14 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
 
     let message = `📈 <b>All Tips History</b> (${games.length})\n──────────────────────\n`;
     const reversedGames = [...pageGames].reverse();
+
     for (let i = 0; i < reversedGames.length; i++) {
       const g = reversedGames[i];
       const date = new Date(g.createdAt);
       const formattedDate = `${date.getDate()}/${date.getMonth() + 1}`;
 
       message += `\n<b>${
-        g.status === "Hit✅"
-          ? "✅ Hit"
-          : g.status === "Miss❌"
-          ? "❌ Miss"
-          : "⌛ Pending"
+        g.status === "Hit✅" ? "✅ Hit" : "❌ Miss"
       } ${escapeHTML(g.tipTitle)} - ${escapeHTML(
         g.contentAfterPurchase
       )}</b>\n`;
@@ -181,7 +185,7 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
       }
     }
 
-    // Pagination buttons (3 centered)
+    // Pagination buttons
     const paginationRow = [
       {
         text: "⬅️ Prev",
@@ -231,6 +235,7 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
     );
   }
 }
+
 bot.on("successful_payment", async (msg) => {
   const chatId = msg.chat.id;
   const payment = msg.successful_payment;
@@ -393,7 +398,7 @@ async function sendMainMenu(chatId, userId, userName, isRetry = false) {
         { text: "🆘 Support", callback_data: "support" },
         { text: "📣 Update Channel", url: "https://t.me/Addictedgames2025" },
       ],
-      [{ text: "🔃 Refresh", callback_data: "main_menu" }],
+      // [{ text: "🔃 Refresh", callback_data: "main_menu" }],
     ];
 
     if (role === "admin") {
@@ -966,8 +971,8 @@ Example: \`100\`
       const statusKeyboard = {
         reply_markup: {
           inline_keyboard: [
-            [{ text: "✅ Won", callback_data: `status_${gameId}_Won` }],
-            [{ text: "❌ Lost", callback_data: `status_${gameId}_Lost` }],
+            [{ text: "✅ Won", callback_data: `status_${gameId}_Hit✅` }],
+            [{ text: "❌ Lost", callback_data: `status_${gameId}_Miss❌` }],
             [{ text: "⏸ Pending", callback_data: `status_${gameId}_Pending` }],
             [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
           ],
@@ -1671,8 +1676,7 @@ ${resultText}
       }
     }
 
-    // When admin clicks "Add Balance"
-    if (data === "add_balance") {
+    if (data.startsWith("add_balance")) {
       try {
         const res = await axios.get(`${BACKEND_URL}/api/auth/getUsers`);
         const users = res.data.users || [];
@@ -1681,24 +1685,79 @@ ${resultText}
           return bot.sendMessage(chatId, "⚠️ No users found.");
         }
 
-        const inlineKeyboard = {
-          inline_keyboard: users.map((u) => [
-            {
-              text: `👤 ${u.userName || u.email} ($${u.availableBalance || 0})`,
-              callback_data: `select_user_${u._id}`,
-            },
-          ]),
-        };
+        // Extract current page number (default 1)
+        const parts = data.split("_page_");
+        const currentPage = parts[1] ? parseInt(parts[1]) : 1;
 
-        await bot.sendMessage(chatId, "👥 *Select a user to add balance to:*", {
+        const usersPerPage = 10;
+        const totalPages = Math.ceil(users.length / usersPerPage);
+
+        // Ensure page bounds
+        const safePage = Math.max(1, Math.min(currentPage, totalPages));
+
+        // Slice users for current page
+        const startIndex = (safePage - 1) * usersPerPage;
+        const endIndex = startIndex + usersPerPage;
+        const usersToShow = users.slice(startIndex, endIndex);
+
+        // Build user buttons
+        const inlineKeyboard = usersToShow.map((u) => [
+          {
+            text: `👤 ${u.userName || u.email} ($${u.availableBalance || 0})`,
+            callback_data: `select_user_${u._id}`,
+          },
+        ]);
+
+        // Pagination row — only if more than 1 page
+        const paginationRow = [];
+
+        if (safePage > 1) {
+          paginationRow.push({
+            text: "⬅️ Prev",
+            callback_data: `add_balance_page_${safePage - 1}`,
+          });
+        }
+
+        paginationRow.push({
+          text: `📝 Page ${safePage}/${totalPages}`,
+          callback_data: "noop",
+        });
+
+        if (safePage < totalPages) {
+          paginationRow.push({
+            text: "➡️ Next",
+            callback_data: `add_balance_page_${safePage + 1}`,
+          });
+        }
+
+        inlineKeyboard.push(paginationRow);
+
+        // Add bottom buttons
+        inlineKeyboard.push([
+          { text: "⬅️ Back to Main Menu", callback_data: "admin_panel" },
+          { text: "🔃 Refresh Management", callback_data: "add_balance" },
+        ]);
+
+        const messageText = `👥 *Select a user to add balance to:* (Page ${safePage}/${totalPages})`;
+
+        // ✅ Edit existing message instead of sending a new one
+        await bot.editMessageText(messageText, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
           parse_mode: "Markdown",
-          reply_markup: inlineKeyboard,
+          reply_markup: { inline_keyboard: inlineKeyboard },
         });
       } catch (err) {
         console.error("Error fetching users:", err.message);
         await bot.sendMessage(chatId, "⚠️ Failed to fetch user list.");
       }
     }
+
+    // 🧩 Optional: handle noop button to prevent errors
+    if (data === "noop") {
+      return bot.answerCallbackQuery(query.id); // silently ignore clicks
+    }
+
     if (data.startsWith("confirm_add_balance_")) {
       const userId = data.replace("confirm_add_balance_", "");
       const s = sessions[chatId];
