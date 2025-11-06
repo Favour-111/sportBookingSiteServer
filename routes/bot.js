@@ -2045,7 +2045,7 @@ Choose an action below:
 async function handleWaitingTips(chatId, messageId = null) {
   try {
     const res = await apiGet("/api/games/allGame");
-    const games = res.data || [];
+    let games = res.data || [];
     games = games.reverse();
 
     // Filter only pending tips
@@ -3193,7 +3193,7 @@ const TIPS_PER_PAGE = 10;
 async function handleManageTips(chatId, page = 1, messageId = null) {
   try {
     const res = await apiGet("/api/games/allGame");
-    const games = (res.data || []).filter((g) => g.status === "Pending");
+    let games = (res.data || []).filter((g) => g.status === "Pending");
     games = games.reverse();
 
     if (!games.length) {
