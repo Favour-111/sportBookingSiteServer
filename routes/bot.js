@@ -138,7 +138,7 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
           reply_markup: {
             inline_keyboard: [
               [{ text: "⬅️ Back", callback_data: "admin_panel" }],
-              [{ text: "🔃 Refresh", callback_data: "history" }],
+              // [{ text: "🔃 Refresh", callback_data: "history" }],
             ],
           },
         });
@@ -206,7 +206,7 @@ async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
     ];
 
     const controlRow = [
-      { text: "🔃 Refresh", callback_data: "history" },
+      // { text: "🔃 Refresh", callback_data: "history" },
       { text: "⬅️ Back", callback_data: "main_menu" },
     ];
 
@@ -625,7 +625,7 @@ Choose an action below:
           { text: "📢 Broadcast Message", callback_data: "broadcast" },
         ],
         [{ text: "⬅️ Back to Main Menu", callback_data: "main_menu" }],
-        [{ text: "🔃 Refresh Management", callback_data: "admin_panel" }],
+        // [{ text: "🔃 Refresh Management", callback_data: "admin_panel" }],
       ],
     },
     parse_mode: "Markdown",
@@ -716,6 +716,17 @@ Select your payment method:
           "⚠️ Could not verify your account or fetch balance. Please try again."
         );
       }
+    }
+    if (data === "toggle_tips") {
+      const session = chatSessions[chatId] || { showAllTips: false };
+      const newShowAll = !session.showAllTips;
+
+      // Delete old message and reload with new state
+      await bot
+        .deleteMessage(chatId, callbackQuery.message.message_id)
+        .catch(() => {});
+      await handleManageTips(chatId, newShowAll);
+      await bot.answerCallbackQuery(callbackQuery.id);
     }
     if (data.startsWith("updateTime_")) {
       const gameId = data.split("_")[1];
@@ -1111,9 +1122,69 @@ We’ll notify you once results are in.`;
     }
 
     if (data === "manage_users") return handleManageUsers(chatId);
+    // 🧠 1. When admin clicks "broadcast"
     if (data === "broadcast") {
-      sessions[chatId] = { step: "broadcast" };
-      return bot.sendMessage(chatId, "📢 Send the message to broadcast:");
+      const res = await apiGet("/api/auth/getUsers");
+      const users = res.data.users || [];
+      const activeCount = users.filter((u) => u.telegramId).length;
+
+      sessions[chatId] = { step: "broadcast_message", totalUsers: activeCount };
+
+      return bot.sendMessage(
+        chatId,
+        `📨 *Send Message to All Users*\n\n👥 Will be sent to *${activeCount} active users*\n\nEnter your message:`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "❌ Cancel", callback_data: "cancel_broadcast" }],
+            ],
+          },
+        }
+      );
+    }
+
+    // 🧠 3. Handle confirmation
+    if (data === "confirm_broadcast_send" && sessions[chatId]) {
+      const { message, totalUsers } = sessions[chatId];
+      await bot.sendMessage(
+        chatId,
+        `📤 Broadcasting message to ${totalUsers} users...`
+      );
+
+      try {
+        const res = await apiGet("/api/auth/getUsers");
+        const users = res.data.users || [];
+
+        let success = 0;
+        for (const u of users) {
+          if (!u.telegramId) continue;
+          try {
+            await bot.sendMessage(u.telegramId, message);
+            success++;
+          } catch (e) {
+            /* ignore */
+          }
+          await new Promise((r) => setTimeout(r, 100)); // avoid rate limits
+        }
+
+        await bot.sendMessage(
+          chatId,
+          `✅ Broadcast complete!\n\n📨 Sent to ${success} out of ${totalUsers} users.`
+        );
+      } catch (err) {
+        console.error("Broadcast error:", err);
+        await bot.sendMessage(chatId, "⚠️ Failed to broadcast message.");
+      }
+
+      delete sessions[chatId];
+      return;
+    }
+
+    // 🧠 4. Handle cancel button
+    if (data === "cancel_broadcast") {
+      delete sessions[chatId];
+      return bot.sendMessage(chatId, "❌ Broadcast cancelled.");
     }
 
     if (data.startsWith("buy_")) {
@@ -1735,7 +1806,7 @@ ${resultText}
         // Add bottom buttons
         inlineKeyboard.push([
           { text: "⬅️ Back to Main Menu", callback_data: "admin_panel" },
-          { text: "🔃 Refresh Management", callback_data: "add_balance" },
+          // { text: "🔃 Refresh Management", callback_data: "add_balance" },
         ]);
 
         const messageText = `👥 *Select a user to add balance to:* (Page ${safePage}/${totalPages})`;
@@ -1880,7 +1951,7 @@ Choose an action below:
                 { text: "📢 Broadcast Message", callback_data: "broadcast" },
               ],
               [{ text: "⬅️ Back to Main Menu", callback_data: "main_menu" }],
-              [{ text: "🔃 Refresh Management", callback_data: "admin_panel" }],
+              // [{ text: "🔃 Refresh Management", callback_data: "admin_panel" }],
             ],
           },
           parse_mode: "Markdown",
@@ -2179,7 +2250,7 @@ async function handlePurchases(chatId, from) {
     const keyboard = {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🔄 Refresh", callback_data: "purchases" }],
+          // [{ text: "🔄 Refresh", callback_data: "purchases" }],
           [{ text: "🏆 More Tips", callback_data: "tips" }],
           [{ text: "⬅️ Back", callback_data: "main_menu" }],
         ],
@@ -2818,23 +2889,37 @@ Click below to complete payment:
         }
       }
     }
-    // === 📢 BROADCAST FLOW ===
-    if (session.step === "broadcast") {
-      await bot.sendMessage(chatId, "📤 Broadcasting message...");
-      const { data } = await apiGet("/api/auth/getUsers");
-      const users = data.users || [];
 
-      for (const u of users) {
-        try {
-          await bot.sendMessage(u.telegramId || ADMIN_ID, text);
-        } catch (e) {
-          /* ignore failures */
+    // 🧠 2. Capture the message admin types
+    if (session?.step === "broadcast_message" && text) {
+      const res = await apiGet("/api/auth/getUsers");
+      const users = res.data.users || [];
+      const activeCount = users.filter((u) => u.telegramId).length;
+
+      sessions[chatId] = {
+        step: "confirm_broadcast",
+        message: text,
+        totalUsers: activeCount,
+      };
+
+      return bot.sendMessage(
+        chatId,
+        `📢 *Preview:*\n\n${text}\n\n👥 Will be sent to *${activeCount} users*\n\n✅ Do you want to send this message to all users?`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "✅ Send to All",
+                  callback_data: "confirm_broadcast_send",
+                },
+                { text: "❌ Cancel", callback_data: "cancel_broadcast" },
+              ],
+            ],
+          },
         }
-      }
-
-      await bot.sendMessage(chatId, "✅ Broadcast complete!");
-      delete sessions[chatId];
-      return;
+      );
     }
 
     // === 🎮 ADD GAME FLOW ===
@@ -2965,8 +3050,8 @@ Click below to complete payment:
           s.data.purchaseLimit = s.data.purchaseLimit || 100;
 
           try {
-            await apiPost(`/api/games/add`, s.data);
-            global.lastAddedGame = s.data;
+            const res = await apiPost(`/api/games/add`, s.data);
+            global.lastAddedGame = res.data.game || res.data.newGame;
 
             await bot.sendMessage(
               chatId,
@@ -3016,20 +3101,37 @@ async function handleManageTips(chatId, showAll = false) {
   try {
     const res = await apiGet("/api/games/allGame");
     let games = res.data || [];
+
     if (!games.length) {
       return bot.sendMessage(chatId, "⚠️ <b>No tips available.</b>", {
         parse_mode: "HTML",
       });
     }
 
-    // Filter pending if showAll = false
-    if (!showAll) {
-      games = games.filter((g) => g.status === "Pending");
-      if (!games.length) {
-        return bot.sendMessage(chatId, "⚠️ <b>No pending tips.</b>", {
-          parse_mode: "HTML",
-        });
-      }
+    // Filter to pending tips if showAll is false
+    let filteredGames = showAll
+      ? games
+      : games.filter((g) => g.status === "Pending");
+
+    if (!filteredGames.length) {
+      const message = showAll
+        ? "⚠️ <b>No tips found.</b>"
+        : "⚠️ <b>No pending tips found.</b>";
+
+      return bot.sendMessage(chatId, message, {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
+            [
+              {
+                text: showAll ? "⬆️ Show Less" : "⬇️ Show All",
+                callback_data: "toggle_tips",
+              },
+            ],
+          ],
+        },
+      });
     }
 
     let text = showAll
@@ -3038,7 +3140,7 @@ async function handleManageTips(chatId, showAll = false) {
 
     const keyboard = [];
 
-    for (const g of games) {
+    for (const g of filteredGames) {
       const tipTitle = escapeHTML(g.tipTitle);
       const price = escapeHTML(String(g.tipPrice));
       const purchasedCount = g.purchasedBy ? g.purchasedBy.length : 0;
@@ -3046,7 +3148,7 @@ async function handleManageTips(chatId, showAll = false) {
       const status = g.active ? "🟢 Active" : "🔴 Inactive";
 
       text += `🏆 <b>${tipTitle}</b>\n`;
-      text += `💵 $${price} | ${purchasedCount} <b>Purchased:</b>\n`;
+      text += `💵 $${price} | ${purchasedCount} <b>Purchased</b>\n`;
       text += `🕕 <b>Duration:</b> ${duration} mins\n`;
       text += `📊 <b>Status:</b> ${status}\n`;
       text += `─────────────────\n`;
@@ -3056,18 +3158,18 @@ async function handleManageTips(chatId, showAll = false) {
       ]);
     }
 
-    // Toggle button
+    // Toggle button (Show All / Show Less)
     keyboard.push([
       {
         text: showAll ? "⬆️ Show Less" : "⬇️ Show All",
-        callback_data: `toggle_tips`,
+        callback_data: "toggle_tips",
       },
     ]);
 
     // Back button
     keyboard.push([{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }]);
 
-    // Save current state
+    // Save current view mode for chat session
     chatSessions[chatId] = { showAllTips: showAll };
 
     await bot.sendMessage(chatId, text, {
@@ -3083,22 +3185,13 @@ async function handleManageTips(chatId, showAll = false) {
 }
 
 // Handle toggle button callback
-bot.on("callback_query", async (callbackQuery) => {
-  const chatId = callbackQuery.message.chat.id;
-  const data = callbackQuery.data;
+// bot.on("callback_query", async (callbackQuery) => {
+//   const chatId = callbackQuery.message.chat.id;
+//   const data = callbackQuery.data;
 
-  if (data === "toggle_tips") {
-    const session = chatSessions[chatId] || { showAllTips: false };
-    const newShowAll = !session.showAllTips;
+//   // Handle toggle_tips callback
 
-    // Delete previous message and resend updated list
-    await bot
-      .deleteMessage(chatId, callbackQuery.message.message_id)
-      .catch(() => {});
-    await handleManageTips(chatId, newShowAll);
-    await bot.answerCallbackQuery(callbackQuery.id);
-  }
-});
+// });
 
 async function handleTipDetails(chatId, gameId) {
   try {
@@ -3157,10 +3250,10 @@ ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
             text: "⏰Extend time",
             callback_data: `updateTime_${selected._id}`,
           },
-          {
-            text: "🏆Notify Buyers",
-            callback_data: `notifyBuyers_${selected._id}`,
-          },
+          // {
+          //   text: "🏆Notify Buyers",
+          //   callback_data: `notifyBuyers_${selected._id}`,
+          // },
         ],
         [
           {
@@ -3362,52 +3455,80 @@ bot.on("callback_query", async (query) => {
       }
 
       const game = global.lastAddedGame;
-      const renderStars = (level) => {
-        return "⭐".repeat(Number(level) || 0) || "N/A";
-      };
-      // 🔥 Safe message for MarkdownV2
-      const message = `🎯 *New Game Alert\\!* 🎯
-──────────────
-🏆 *Title:* ${escapeMarkdownV2(game.tipTitle)}
+
+      // Escape MarkdownV2 special characters
+      const escapeMarkdownV2 = (text) =>
+        String(text || "").replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
+
+      const renderStars = (level) => "⭐".repeat(Number(level) || 0) || "N/A";
+
+      const message = `🚨 *NEW TIP AVAILABLE\\!* 🚨
+
+🏆 *Game:* ${escapeMarkdownV2(game.tipTitle)}
 💰 *Price:* \\$${escapeMarkdownV2(String(game.tipPrice))}
-📊 *Odd:* ${escapeMarkdownV2(String(game.oddRatio))}
-🔥 *Confidence:* ${renderStars(game.confidenceLevel) || "N/A"}
-──────────────
-🧠 *Summary:* ${escapeMarkdownV2(
-        game.shortDescription || "New tip available now!"
-      )}
-──────────────
-👉 *Check it now in the /tips section\\!*`;
+📊 *Odds:* ${escapeMarkdownV2(String(game.oddRatio))}
+🎯 *Confidence:* ${renderStars(game.confidenceLevel) || "⭐️⭐️⭐️⭐️⭐️"}
+
+⚡️ *Limited to ${escapeMarkdownV2(
+        String(game.purchaseLimit)
+      )} purchases only\\!*
+⏰ *Critical time:* ${escapeMarkdownV2(String(game.duration))} min
+
+⚠️ *Reminder:* Place your bets only on verified betting sites\\.`;
 
       await bot.sendMessage(chatId, "📢 Broadcasting new game to all users...");
 
       let successCount = 0;
       let failCount = 0;
 
-      for (const [userChatId, ctx] of userContext.entries()) {
-        if (String(userChatId) === String(chatId)) continue;
+      try {
+        // 🔹 Fetch all users from your API
+        const res = await apiGet("/api/auth/getUsers");
+        const users = res.data.users || [];
 
-        try {
-          await bot.sendMessage(userChatId, message, {
-            parse_mode: "MarkdownV2",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "🎯 View Tips Now", callback_data: "tips" }],
-              ],
-            },
-          });
-          successCount++;
-        } catch (err) {
-          console.error(`Failed to broadcast to ${userChatId}:`, err.message);
-          failCount++;
+        for (const user of users) {
+          const userChatId = user.telegramId;
+          if (!userChatId) continue;
+          if (String(userChatId) === String(chatId)) continue; // skip admin
+
+          try {
+            await bot.sendMessage(userChatId, message, {
+              parse_mode: "MarkdownV2",
+              reply_markup: {
+                inline_keyboard: [
+                  [
+                    {
+                      text: "💳 Buy Now",
+                      callback_data: `confirmBuy_${String(game._id || "")}`, // ✅ fixed
+                    },
+                  ],
+                  [{ text: "🎯 View Tips Now", callback_data: "tips" }],
+                ],
+              },
+            });
+
+            successCount++;
+          } catch (err) {
+            console.error(`❌ Failed to send to ${userChatId}:`, err.message);
+            failCount++;
+          }
+
+          // 🕒 Optional small delay to avoid Telegram rate limits
+          await new Promise((r) => setTimeout(r, 150));
         }
-      }
 
-      await bot.sendMessage(
-        chatId,
-        `✅ Broadcast complete\\!\n\n📨 Sent: ${successCount}\n⚠️ Failed: ${failCount}`,
-        { parse_mode: "MarkdownV2" }
-      );
+        await bot.sendMessage(
+          chatId,
+          `<b>✅ Broadcast complete!</b>\n\n📨 Sent: ${successCount}\n⚠️ Failed: ${failCount}`,
+          { parse_mode: "HTML" }
+        );
+      } catch (err) {
+        console.error("❌ Failed to broadcast:", err);
+        await bot.sendMessage(
+          chatId,
+          "⚠️ Failed to fetch user list or send messages."
+        );
+      }
 
       await bot.answerCallbackQuery(query.id);
     }
