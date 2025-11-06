@@ -46,25 +46,6 @@ async function safeSendHTML(bot, chatId, html, options = {}) {
     await bot.sendMessage(chatId, html.replace(/<[^>]*>/g, ""));
   }
 }
-async function updateOrSend(bot, chatId, text, options = {}, messageId = null) {
-  try {
-    if (messageId) {
-      return await bot.editMessageText(text, {
-        chat_id: chatId,
-        message_id: messageId,
-        ...options,
-      });
-    } else {
-      const sent = await bot.sendMessage(chatId, text, options);
-      return sent;
-    }
-  } catch (err) {
-    console.error("updateOrSend error:", err.message);
-    if (err.response?.body?.description?.includes("message is not modified"))
-      return;
-    await bot.sendMessage(chatId, text, options);
-  }
-}
 
 // === HTTP helpers ===
 async function apiGet(path) {
@@ -639,6 +620,7 @@ Choose an action below:
           { text: "🧾 Manage Tips", callback_data: "manage_tips" },
           { text: "👥 Manage Users", callback_data: "manage_users" },
         ],
+        [{ text: "⌛ Awaiting Result", callback_data: "awaiting_Result" }],
         [
           { text: "💰 Add Balance", callback_data: "add_balance" },
           { text: "📢 Broadcast Message", callback_data: "broadcast" },
@@ -666,6 +648,7 @@ bot.on("callback_query", async (query) => {
       "add_tip",
       "view_stats",
       "manage_tips",
+      "awaiting_Result",
       "manage_users",
       "add_balance",
       "broadcast",
@@ -675,12 +658,18 @@ bot.on("callback_query", async (query) => {
       await bot.answerCallbackQuery(query.id, { text: "Unauthorized" });
       return;
     }
+    if (data === "awaiting_Result") {
+      await handleWaitingTips(chatId, false, query.message.message_id);
+      // 'false' = show only Pending
+      return bot.answerCallbackQuery(query.id); // removes loading spinner
+    }
 
     // Small router
     if (data === "tips") return handleShowTips(chatId, from);
     if (data === "add_tip") return startAddGameFlow(chatId);
     if (data === "view_stats") return handleViewStats(chatId);
     if (data === "manage_tips") return handleManageTips(chatId);
+
     if (data === "purchases") return handlePurchases(chatId, from);
     if (data === "deposit") {
       try {
@@ -735,15 +724,6 @@ Select your payment method:
           "⚠️ Could not verify your account or fetch balance. Please try again."
         );
       }
-    }
-    if (data === "toggle_tips") {
-      const session = chatSessions[chatId] || { showAllTips: false };
-      const newShowAll = !session.showAllTips;
-
-      // Delete old message and reload with new state
-      await bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
-      await handleManageTips(chatId, newShowAll);
-      await bot.answerCallbackQuery(query.id);
     }
 
     if (data.startsWith("updateTime_")) {
@@ -1261,6 +1241,7 @@ We’ll notify you once results are in.`;
 💵 *Price:* $${String(game.tipPrice)}
 📊 *Odds ratio:* ${game.oddRatio}
 🔥 *Confidence Level:* ${renderStars(game.confidenceLevel)}
+🟡 *${game.bettingSites}:* 
 
 ${progressText}
 
@@ -1964,6 +1945,14 @@ Choose an action below:
                 { text: "🧾 Manage Tips", callback_data: "manage_tips" },
                 { text: "👥 Manage Users", callback_data: "manage_users" },
               ],
+
+              [
+                {
+                  text: "⌛ Awaiting Result",
+                  callback_data: "awaiting_Result",
+                },
+              ],
+
               [
                 { text: "💰 Add Balance", callback_data: "add_balance" },
                 { text: "📢 Broadcast Message", callback_data: "broadcast" },
@@ -2053,6 +2042,90 @@ Choose an action below:
     }
   }
 });
+async function handleWaitingTips(chatId, messageId = null) {
+  try {
+    const res = await apiGet("/api/games/allGame");
+    const games = res.data || [];
+    games = games.reverse();
+
+    // Filter only pending tips
+    const pendingTips = games.filter((g) => g.status === "Pending");
+
+    if (!pendingTips.length) {
+      const text = "⚠️ <b>No pending tips available.</b>";
+      const reply_markup = {
+        inline_keyboard: [
+          [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
+        ],
+      };
+
+      if (messageId) {
+        return bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup,
+        });
+      }
+
+      return bot.sendMessage(chatId, text, {
+        parse_mode: "HTML",
+        reply_markup,
+      });
+    }
+
+    // Build the message text
+    let text = "⌛ <b>Pending Tips:</b>\n\n";
+    const keyboard = [];
+
+    for (const g of pendingTips) {
+      const tipTitle = escapeHTML(g.tipTitle);
+      const price = escapeHTML(String(g.tipPrice));
+      const purchasedCount = g.purchasedBy ? g.purchasedBy.length : 0;
+      const duration = escapeHTML(String(g.duration));
+      const status = g.active ? "🟢 Active" : "🔴 Inactive";
+
+      text += `🏆 <b>${tipTitle}</b>\n`;
+      text += `💵 $${price} | ${purchasedCount} <b>Purchased</b>\n`;
+      text += `🕕 <b>Duration:</b> ${duration} mins\n`;
+      text += `📊 <b>Status:</b> ${status}\n`;
+      text += `─────────────────\n`;
+
+      keyboard.push([
+        { text: `📊 View ${tipTitle}`, callback_data: `tip_${g._id}` },
+      ]);
+    }
+
+    // Always show Back to Admin
+    keyboard.push([{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }]);
+
+    const options = {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: keyboard },
+    };
+
+    if (messageId) {
+      await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...options,
+      });
+    } else {
+      await bot.sendMessage(chatId, text, options);
+    }
+  } catch (err) {
+    console.error("handleManageTips error:", err.message || err);
+    const text = "⚠️ Failed to fetch tips.";
+    if (messageId) {
+      return bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+      });
+    }
+    await bot.sendMessage(chatId, text, { parse_mode: "HTML" });
+  }
+}
 
 async function handleShowTips(chatId, from) {
   try {
@@ -3115,50 +3188,49 @@ function startAddGameFlow(chatId) {
 }
 // === manage_tips & manage_users implementations (simplified) ===
 const chatSessions = {};
-async function handleManageTips(chatId, showAll = false) {
+const TIPS_PER_PAGE = 10;
+
+async function handleManageTips(chatId, page = 1, messageId = null) {
   try {
     const res = await apiGet("/api/games/allGame");
-    let games = res.data || [];
+    const games = (res.data || []).filter((g) => g.status === "Pending");
+    games = games.reverse();
 
     if (!games.length) {
-      return bot.sendMessage(chatId, "⚠️ <b>No tips available.</b>", {
+      const text = "⚠️ <b>No pending tips available.</b>";
+      const reply_markup = {
+        inline_keyboard: [
+          [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
+        ],
+      };
+
+      if (messageId) {
+        return bot.editMessageText(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup,
+        });
+      }
+
+      return bot.sendMessage(chatId, text, {
         parse_mode: "HTML",
+        reply_markup,
       });
     }
 
-    // Filter to pending tips if showAll is false
-    let filteredGames = showAll
-      ? games
-      : games.filter((g) => g.status === "Pending");
+    // Pagination logic
+    const totalPages = Math.ceil(games.length / TIPS_PER_PAGE);
+    const safePage = Math.max(1, Math.min(page, totalPages));
+    const startIndex = (safePage - 1) * TIPS_PER_PAGE;
+    const endIndex = startIndex + TIPS_PER_PAGE;
+    const paginatedTips = games.slice(startIndex, endIndex);
 
-    if (!filteredGames.length) {
-      const message = showAll
-        ? "⚠️ <b>No tips found.</b>"
-        : "⚠️ <b>No pending tips found.</b>";
+    // Build message text
+    let text = `🧾 <b>Pending Tips (Page ${safePage}/${totalPages}):</b>\n\n`;
+    const inlineKeyboard = [];
 
-      return bot.sendMessage(chatId, message, {
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
-            [
-              {
-                text: showAll ? "⬆️ Show Less" : "⬇️ Show All",
-                callback_data: "toggle_tips",
-              },
-            ],
-          ],
-        },
-      });
-    }
-
-    let text = showAll
-      ? "🧾 <b>All Tips:</b>\n\n"
-      : "🧾 <b>Pending Tips:</b>\n\n";
-
-    const keyboard = [];
-
-    for (const g of filteredGames) {
+    for (const g of paginatedTips) {
       const tipTitle = escapeHTML(g.tipTitle);
       const price = escapeHTML(String(g.tipPrice));
       const purchasedCount = g.purchasedBy ? g.purchasedBy.length : 0;
@@ -3171,45 +3243,81 @@ async function handleManageTips(chatId, showAll = false) {
       text += `📊 <b>Status:</b> ${status}\n`;
       text += `─────────────────\n`;
 
-      keyboard.push([
+      inlineKeyboard.push([
         { text: `📊 View ${g.tipTitle}`, callback_data: `tip_${g._id}` },
       ]);
     }
 
-    // Toggle button (Show All / Show Less)
-    keyboard.push([
-      {
-        text: showAll ? "⬆️ Show Less" : "⬇️ Show All",
-        callback_data: "toggle_tips",
-      },
+    // Pagination row
+    const paginationRow = [];
+    if (safePage > 1) {
+      paginationRow.push({
+        text: "⬅️ Prev",
+        callback_data: `manage_tips_page_${safePage - 1}`,
+      });
+    }
+    paginationRow.push({
+      text: `Page ${safePage}/${totalPages}`,
+      callback_data: "noop",
+    });
+    if (safePage < totalPages) {
+      paginationRow.push({
+        text: "Next ➡️",
+        callback_data: `manage_tips_page_${safePage + 1}`,
+      });
+    }
+    inlineKeyboard.push(paginationRow);
+
+    // Back to admin
+    inlineKeyboard.push([
+      { text: "⬅️ Back to Admin", callback_data: "admin_panel" },
     ]);
 
-    // Back button
-    keyboard.push([{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }]);
-
-    // Save current view mode for chat session
-    chatSessions[chatId] = { showAllTips: showAll };
-
-    await bot.sendMessage(chatId, text, {
+    const options = {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: keyboard },
-    });
+      reply_markup: { inline_keyboard: inlineKeyboard },
+    };
+
+    if (messageId) {
+      await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...options,
+      });
+    } else {
+      await bot.sendMessage(chatId, text, options);
+    }
   } catch (err) {
     console.error("handleManageTips error:", err.message || err);
-    await bot.sendMessage(chatId, "⚠️ Failed to fetch tips.", {
-      parse_mode: "HTML",
-    });
+    const text = "⚠️ Failed to fetch tips.";
+    if (messageId) {
+      return bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+      });
+    }
+    await bot.sendMessage(chatId, text, { parse_mode: "HTML" });
   }
 }
 
-// Handle toggle button callback
-// bot.on("callback_query", async (callbackQuery) => {
-//   const chatId = callbackQuery.message.chat.id;
-//   const data = callbackQuery.data;
+// Handle noop clicks silently
+bot.on("callback_query", async (query) => {
+  if (query.data === "noop") {
+    return bot.answerCallbackQuery(query.id);
+  }
 
-//   // Handle toggle_tips callback
-
-// });
+  // Handle page change
+  if (query.data.startsWith("manage_tips_page_")) {
+    const page = parseInt(query.data.split("_").pop());
+    await handleManageTips(
+      query.message.chat.id,
+      page,
+      query.message.message_id
+    );
+    return bot.answerCallbackQuery(query.id); // stop loading spinner
+  }
+});
 
 async function handleTipDetails(chatId, gameId) {
   try {
@@ -3486,6 +3594,7 @@ bot.on("callback_query", async (query) => {
 💰 *Price:* \\$${escapeMarkdownV2(String(game.tipPrice))}
 📊 *Odds:* ${escapeMarkdownV2(String(game.oddRatio))}
 🎯 *Confidence:* ${renderStars(game.confidenceLevel) || "⭐️⭐️⭐️⭐️⭐️"}
+🟡 *${escapeMarkdownV2(game.bettingSites)}:*
 
 ⚡️ *Limited to ${escapeMarkdownV2(
         String(game.purchaseLimit)
