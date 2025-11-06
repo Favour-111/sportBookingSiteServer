@@ -46,6 +46,25 @@ async function safeSendHTML(bot, chatId, html, options = {}) {
     await bot.sendMessage(chatId, html.replace(/<[^>]*>/g, ""));
   }
 }
+async function updateOrSend(bot, chatId, text, options = {}, messageId = null) {
+  try {
+    if (messageId) {
+      return await bot.editMessageText(text, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...options,
+      });
+    } else {
+      const sent = await bot.sendMessage(chatId, text, options);
+      return sent;
+    }
+  } catch (err) {
+    console.error("updateOrSend error:", err.message);
+    if (err.response?.body?.description?.includes("message is not modified"))
+      return;
+    await bot.sendMessage(chatId, text, options);
+  }
+}
 
 // === HTTP helpers ===
 async function apiGet(path) {
@@ -722,12 +741,11 @@ Select your payment method:
       const newShowAll = !session.showAllTips;
 
       // Delete old message and reload with new state
-      await bot
-        .deleteMessage(chatId, callbackQuery.message.message_id)
-        .catch(() => {});
+      await bot.deleteMessage(chatId, query.message.message_id).catch(() => {});
       await handleManageTips(chatId, newShowAll);
-      await bot.answerCallbackQuery(callbackQuery.id);
+      await bot.answerCallbackQuery(query.id);
     }
+
     if (data.startsWith("updateTime_")) {
       const gameId = data.split("_")[1];
 
