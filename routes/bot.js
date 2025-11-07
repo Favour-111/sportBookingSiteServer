@@ -115,126 +115,30 @@ function escapeMarkdown(text = "") {
   const str = String(text);
   return str.replace(/[_*\[\]()~`>#+\-=|{}.!]/g, "\\$&");
 }
-/**
- * Show all game history (admin-style view)
- */
+
 const tipsPagination = {}; // store pagination state per chat
 
-async function handleAllTipsHistory(chatId, page = 1, messageId = null) {
-  try {
-    // Cache tips for this chat
-    if (!tipsPagination[chatId] || !tipsPagination[chatId].games) {
-      const res = await apiGet("/api/games/allGame");
-      const games = res.data || [];
+// Handle pagination callback
+bot.on("callback_query", async (query) => {
+  const data = query.data;
+  const chatId = query.message.chat.id;
 
-      // Filter only Hit✅ or Miss❌ games
-      const filteredGames = games.filter(
-        (g) => g.status === "Hit✅" || g.status === "Miss❌"
-      );
-
-      if (!filteredGames.length) {
-        return bot.sendMessage(chatId, "📭 <b>No game history found yet.</b>", {
-          parse_mode: "HTML",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "⬅️ Back", callback_data: "admin_panel" }],
-              // [{ text: "🔃 Refresh", callback_data: "history" }],
-            ],
-          },
-        });
-      }
-
-      tipsPagination[chatId] = { games: filteredGames, page: 1 };
-    }
-
-    const { games } = tipsPagination[chatId];
-    const totalPages = Math.ceil(games.length / 10);
-    const currentPage = Math.min(Math.max(page, 1), totalPages);
-    tipsPagination[chatId].page = currentPage;
-
-    const start = (currentPage - 1) * 10;
-    const end = start + 10;
-    const pageGames = games.slice(start, end);
-
-    let message = `📈 <b>All Tips History</b> (${games.length})\n──────────────────────\n`;
-    const reversedGames = [...pageGames].reverse();
-
-    for (let i = 0; i < reversedGames.length; i++) {
-      const g = reversedGames[i];
-      const date = new Date(g.createdAt);
-      const formattedDate = `${date.getDate()}/${date.getMonth() + 1}`;
-
-      message += `\n<b>${
-        g.status === "Hit✅" ? "✅ Hit" : "❌ Miss"
-      } ${escapeHTML(g.tipTitle)} - ${escapeHTML(
-        g.contentAfterPurchase
-      )}</b>\n`;
-      message += `💰 <b>$${escapeHTML(String(g.tipPrice))} | 📊 ${escapeHTML(
-        String(g.oddRatio)
-      )} | 📅 ${escapeHTML(formattedDate)}</b>\n`;
-      message += `⭐️ ${escapeHTML(
-        String(g.purchasedBy.length || 0)
-      )} users purchased this tip\n`;
-
-      message += `<blockquote>💸 <b>250₪ turned into ${escapeHTML(
-        (250 * g.oddRatio).toLocaleString()
-      )}₪ 💸</b></blockquote>\n`;
-
-      if (i < pageGames.length - 1) {
-        message += `──────────────────────\n`;
-      }
-    }
-
-    // Pagination buttons
-    const paginationRow = [
-      {
-        text: "⬅️ Prev",
-        callback_data:
-          currentPage > 1 ? `tips_history_page_${currentPage - 1}` : "noop",
-      },
-      {
-        text: `📄 ${currentPage}/${totalPages}`,
-        callback_data: "noop",
-      },
-      {
-        text: "➡️ Next",
-        callback_data:
-          currentPage < totalPages
-            ? `tips_history_page_${currentPage + 1}`
-            : "noop",
-      },
-    ];
-
-    const controlRow = [
-      // { text: "🔃 Refresh", callback_data: "history" },
-      { text: "⬅️ Back", callback_data: "main_menu" },
-    ];
-
-    const inlineKeyboard = [paginationRow, controlRow];
-
-    // Edit message if already sent, else send new
-    if (messageId) {
-      await bot.editMessageText(message, {
-        chat_id: chatId,
-        message_id: messageId,
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: inlineKeyboard },
-      });
-    } else {
-      await bot.sendMessage(chatId, message, {
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: inlineKeyboard },
-      });
-    }
-  } catch (err) {
-    console.error("handleAllTipsHistory error:", err.message || err);
-    await bot.sendMessage(
-      chatId,
-      "⚠️ Failed to load tips history. Try again later.",
-      { parse_mode: "HTML" }
-    );
+  if (data.startsWith("tips_history_page_")) {
+    const page = parseInt(data.split("_").pop());
+    return handleAllTipsHistory(chatId, page, query.message.message_id, query);
   }
-}
+
+  if (data === "history") {
+    return handleAllTipsHistory(chatId, 1, query.message.message_id, query);
+  }
+
+  if (data === "noop") {
+    return bot.answerCallbackQuery(query.id, {
+      text: "⏺️ You’re on this page",
+      show_alert: false,
+    });
+  }
+});
 
 bot.on("successful_payment", async (msg) => {
   const chatId = msg.chat.id;
@@ -271,27 +175,7 @@ bot.on("successful_payment", async (msg) => {
 });
 
 // Add pagination handling in your callback_query listener
-bot.on("callback_query", async (query) => {
-  const { data, message } = query;
-  const chatId = message.chat.id;
 
-  try {
-    // Handle pagination
-    if (data.startsWith("tips_history_page_")) {
-      const page = parseInt(data.split("_").pop());
-      return handleAllTipsHistory(chatId, page, message.message_id);
-    }
-
-    // Ignore “noop” buttons
-    if (data === "noop") {
-      return bot.answerCallbackQuery(query.id, {
-        text: "⏺️ You’re on this page",
-      });
-    }
-  } catch (err) {
-    console.error("callback_query error:", err.message);
-  }
-});
 /**
  * View full details of a specific game from history
  */
@@ -876,10 +760,7 @@ Example: \`100\`
       const gameId = data.split("_")[1];
       return handleTipDetails(chatId, gameId);
     }
-    if (data === "history") {
-      await handleAllTipsHistory(chatId);
-      return bot.answerCallbackQuery(query.id);
-    }
+
     // 💠 Handle "Pay Now" click
     if (data.startsWith("crypto_paynow_")) {
       const transactionId = data.split("_")[2];
@@ -2364,63 +2245,127 @@ async function handlePurchases(chatId, from) {
     );
   }
 }
+async function handleAllTipsHistory(
+  chatId,
+  page = 1,
+  messageId = null,
+  query = null
+) {
+  // Predefine inlineKeyboard so it's always in scope
+  let inlineKeyboard = [[{ text: "⬅️ Back", callback_data: "main_menu" }]];
 
-async function handleViewTipDetails(chatId, gameId) {
   try {
     const res = await apiGet("/api/games/allGame");
-    const games = res.data || [];
-    const selected = games.find((g) => String(g._id) === String(gameId));
+    const allGames = res.data || [];
 
-    if (!selected) {
-      return bot.sendMessage(chatId, "⚠️ Game not found.");
+    if (!allGames.length) {
+      return bot.sendMessage(chatId, "📭 <b>No game history found yet.</b>", {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      });
     }
 
-    const renderStars = (level) => {
-      return "⭐".repeat(Number(level) || 0) || "N/A";
-    };
-
-    const details =
-      `🏆 *${escapeMarkdown(selected.tipTitle)}*\n\n` +
-      `💵 Price: $${escapeMarkdown(selected.tipPrice)}\n` +
-      `📈 Odds: ${escapeMarkdown(selected.oddRatio)}\n` +
-      `🎯 Confidence: ${escapeMarkdown(
-        renderStars(selected.confidenceLevel)
-      )}\n\n` +
-      `📝 ${escapeMarkdown(
-        selected.contentAfterPurchase || "No description provided."
-      )}`;
-
-    const inlineKeyboard = {
-      inline_keyboard: [
-        [
-          {
-            text: selected.active ? "🔴 Deactivate" : "🟢 Activate",
-            callback_data: `toggle_${selected._id}`,
-          },
-          {
-            text: "📢 Notify Buyers",
-            callback_data: `notify_${selected._id}`,
-          },
-        ],
-        [{ text: "⬅️ Back to Tips", callback_data: "tips" }],
-      ],
-    };
-
-    if (selected.image) {
-      await bot.sendPhoto(chatId, selected.image, {
-        caption: details,
-        parse_mode: "Markdown",
-        reply_markup: inlineKeyboard,
+    // Filter only Hit & Miss tips
+    let games = allGames.filter(
+      (g) => g.status === "Hit✅" || g.status === "Miss❌"
+    );
+    games = games.reverse();
+    if (!games.length) {
+      return bot.sendMessage(chatId, "📭 <b>No Hit or Miss tips found.</b>", {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: inlineKeyboard },
       });
+    }
+
+    // Pagination
+    const totalPages = Math.ceil(games.length / TIPS_PER_PAGE);
+    const currentPage = Math.min(Math.max(page, 1), totalPages);
+    const startIndex = (currentPage - 1) * TIPS_PER_PAGE;
+    const endIndex = startIndex + TIPS_PER_PAGE;
+    const pageGames = games.slice(startIndex, endIndex);
+
+    // Build message
+    let message = `📈 <b>All Tips History</b> (${games.length} tips)\n──────────────────────\n`;
+    pageGames.forEach((g) => {
+      const date = new Date(g.createdAt);
+      const formattedDate = `${date.getDate()}/${
+        date.getMonth() + 1
+      }/${date.getFullYear()}`;
+      const statusText = g.status === "Hit✅" ? "✅ Hit" : "❌ Miss";
+
+      message += `\n<b>${statusText} - ${escapeHTML(g.tipTitle)}</b>\n`;
+      message += `💵 $${escapeHTML(String(g.tipPrice))} | 📊 ${escapeHTML(
+        String(g.oddRatio)
+      )} | 📅 ${formattedDate}\n`;
+      message += `⭐️ Purchased by: ${g.purchasedBy?.length || 0} users\n`;
+      message += `<blockquote>💸 <b>250₪ turned into ${escapeHTML(
+        (250 * g.oddRatio).toLocaleString()
+      )}₪ 💸</b></blockquote>\n`;
+      message += `──────────────────────\n`;
+    });
+
+    // Pagination buttons
+    const paginationRow = [];
+    if (currentPage > 1)
+      paginationRow.push({
+        text: "⬅️ Prev",
+        callback_data: `tips_history_page_${currentPage - 1}`,
+      });
+    paginationRow.push({
+      text: `📄 ${currentPage}/${totalPages}`,
+      callback_data: "noop",
+    });
+    if (currentPage < totalPages)
+      paginationRow.push({
+        text: "➡️ Next",
+        callback_data: `tips_history_page_${currentPage + 1}`,
+      });
+
+    inlineKeyboard = [
+      paginationRow,
+      [{ text: "⬅️ Back", callback_data: "main_menu" }],
+    ];
+
+    // Send or edit message
+    if (messageId) {
+      try {
+        await bot.editMessageText(message, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          reply_markup: { inline_keyboard: inlineKeyboard }, // ✅ Use the correct variable
+        });
+      } catch (err) {
+        // Handle "message not modified"
+        if (
+          err?.response?.body?.description?.includes(
+            "message is not modified"
+          ) &&
+          query
+        ) {
+          await bot.answerCallbackQuery(query.id);
+        } else {
+          throw err;
+        }
+      }
     } else {
-      await bot.sendMessage(chatId, details, {
-        parse_mode: "Markdown",
-        reply_markup: inlineKeyboard,
+      await bot.sendMessage(chatId, message, {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: inlineKeyboard }, // ✅ Use the correct variable
       });
     }
+
+    if (query) await bot.answerCallbackQuery(query.id);
   } catch (err) {
-    console.error("handleViewTipDetails error:", err);
-    await bot.sendMessage(chatId, "⚠️ Error fetching tip details.");
+    console.error("handleAllTipsHistory error:", err.message || err);
+    await bot.sendMessage(
+      chatId,
+      "⚠️ Failed to load tips history. Try again later.",
+      {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: inlineKeyboard }, // ✅ always safe
+      }
+    );
   }
 }
 
