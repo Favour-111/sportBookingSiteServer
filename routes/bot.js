@@ -1930,7 +1930,9 @@ async function handleWaitingTips(chatId, messageId = null) {
     games = games.reverse();
 
     // Filter only pending tips
-    const pendingTips = games.filter((g) => g.status === "Pending");
+    const pendingTips = games.filter(
+      (g) => g.status === "Pending" && g.active === false
+    );
 
     if (!pendingTips.length) {
       const text = "⚠️ <b>No pending tips available.</b>";
@@ -3140,7 +3142,7 @@ const TIPS_PER_PAGE = 10;
 async function handleManageTips(chatId, page = 1, messageId = null) {
   try {
     const res = await apiGet("/api/games/allGame");
-    let games = (res.data || []).filter((g) => g.status === "Pending");
+    let games = res.data || [];
     games = games.reverse();
 
     if (!games.length) {
