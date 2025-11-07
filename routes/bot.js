@@ -2293,7 +2293,9 @@ async function handleAllTipsHistory(
       }/${date.getFullYear()}`;
       const statusText = g.status === "Hit✅" ? "✅ Hit" : "❌ Miss";
 
-      message += `\n<b>${statusText} - ${escapeHTML(g.tipTitle)}</b>\n`;
+      message += `\n<b>${statusText} ${escapeHTML(g.tipTitle)} - ${escapeHTML(
+        g.contentAfterPurchase
+      )}</b>\n`;
       message += `💵 $${escapeHTML(String(g.tipPrice))} | 📊 ${escapeHTML(
         String(g.oddRatio)
       )} | 📅 ${formattedDate}\n`;
@@ -2301,7 +2303,7 @@ async function handleAllTipsHistory(
       message += `<blockquote>💸 <b>250₪ turned into ${escapeHTML(
         (250 * g.oddRatio).toLocaleString()
       )}₪ 💸</b></blockquote>\n`;
-      message += `──────────────────────\n`;
+      message += `─────────────────\n`;
     });
 
     // Pagination buttons
