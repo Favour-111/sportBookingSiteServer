@@ -543,18 +543,21 @@ bot.on("callback_query", async (query) => {
       return;
     }
     if (data === "awaiting_Result") {
-      await handleWaitingTips(chatId, false, query.message.message_id);
-      // 'false' = show only Pending
+      await handleWaitingTips(chatId, query.message.message_id);
       return bot.answerCallbackQuery(query.id); // removes loading spinner
     }
 
     // Small router
-    if (data === "tips") return handleShowTips(chatId, from);
+    if (data === "tips")
+      return handleShowTips(chatId, from, query.message.message_id);
     if (data === "add_tip") return startAddGameFlow(chatId);
-    if (data === "view_stats") return handleViewStats(chatId);
-    if (data === "manage_tips") return handleManageTips(chatId);
+    if (data === "view_stats")
+      return handleViewStats(chatId, query.message.message_id);
+    if (data === "manage_tips")
+      return handleManageTips(chatId, 1, query.message.message_id);
 
-    if (data === "purchases") return handlePurchases(chatId, from);
+    if (data === "purchases")
+      return handlePurchases(chatId, from, query.message.message_id);
     if (data === "deposit") {
       try {
         // Step 1: Ensure backend user exists
@@ -568,7 +571,7 @@ bot.on("callback_query", async (query) => {
         const user = userRes.data?.user;
         const currentBalance = user?.availableBalance || 0;
 
-        // Step 3: Send a structured deposit menu
+        // Step 3: Edit message with deposit menu
         const messageText = `
 💳 *Add Funds*
 
@@ -597,15 +600,20 @@ Select your payment method:
           ],
         };
 
-        await bot.sendMessage(chatId, messageText, {
+        await bot.editMessageText(messageText, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
           parse_mode: "Markdown",
           reply_markup: inlineKeyboard,
         });
       } catch (err) {
         console.error("Deposit flow error:", err.message || err);
-        await bot.sendMessage(
-          chatId,
-          "⚠️ Could not verify your account or fetch balance. Please try again."
+        await bot.editMessageText(
+          "⚠️ Could not verify your account or fetch balance. Please try again.",
+          {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+          }
         );
       }
     }
@@ -613,13 +621,25 @@ Select your payment method:
     if (data.startsWith("updateTime_")) {
       const gameId = data.split("_")[1];
 
-      // Ask the admin for the new duration
-      await bot.sendMessage(chatId, "⏰ Enter new duration (in minutes):");
-
       // Save session to know which game to update
       chatSessions[chatId] = { gameId, step: "updating_duration" };
 
-      // ✅ Use query.id here
+      const prompt = "⏰ Enter new duration (in minutes):";
+      const kb = {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
+          ],
+        },
+      };
+
+      await bot.editMessageText(prompt, {
+        chat_id: chatId,
+        message_id: query.message.message_id,
+        parse_mode: "Markdown",
+        ...kb,
+      });
+
       await bot.answerCallbackQuery(query.id);
     }
 
@@ -758,7 +778,7 @@ Example: \`100\`
 
     if (data.startsWith("tip_")) {
       const gameId = data.split("_")[1];
-      return handleTipDetails(chatId, gameId);
+      return handleTipDetails(chatId, gameId, query.message.message_id);
     }
 
     // 💠 Handle "Pay Now" click
@@ -869,7 +889,9 @@ Example: \`100\`
         },
       };
 
-      return bot.sendMessage(chatId, "📊 *Select new status for this tip:*", {
+      return bot.editMessageText("📊 *Select new status for this tip:*", {
+        chat_id: chatId,
+        message_id: query.message.message_id,
         parse_mode: "Markdown",
         ...statusKeyboard,
       });
@@ -883,8 +905,10 @@ Example: \`100\`
           gameStatus: status,
         });
 
-        // 2️⃣ Confirm to admin
-        await bot.sendMessage(chatId, `✅ *${status}* set for this game!`, {
+        // 2️⃣ Confirm to admin with edit
+        await bot.editMessageText(`✅ *${status}* set for this game!`, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
           parse_mode: "Markdown",
           reply_markup: {
             inline_keyboard: [
@@ -1000,7 +1024,8 @@ We’ll notify you once results are in.`;
       }
     }
 
-    if (data === "manage_users") return handleManageUsers(chatId);
+    if (data === "manage_users")
+      return handleManageUsers(chatId, 1, query.message.message_id);
     // 🧠 1. When admin clicks "broadcast"
     if (data === "broadcast") {
       const res = await apiGet("/api/auth/getUsers");
@@ -1009,18 +1034,25 @@ We’ll notify you once results are in.`;
 
       sessions[chatId] = { step: "broadcast_message", totalUsers: activeCount };
 
-      return bot.sendMessage(
-        chatId,
-        `📨 *Send Message to All Users*\n\n👥 Will be sent to *${activeCount} active users*\n\nEnter your message:`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "❌ Cancel", callback_data: "cancel_broadcast" }],
-            ],
-          },
-        }
-      );
+      const broadcastText = `📨 *Send Message to All Users*\n\n👥 Will be sent to *${activeCount} active users*\n\nEnter your message:`;
+      const options = {
+        parse_mode: "Markdown",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "❌ Cancel", callback_data: "cancel_broadcast" }],
+          ],
+        },
+      };
+
+      if (query.message.message_id) {
+        return bot.editMessageText(broadcastText, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          ...options,
+        });
+      } else {
+        return bot.sendMessage(chatId, broadcastText, options);
+      }
     }
 
     // 🧠 3. Handle confirmation
@@ -1063,7 +1095,32 @@ We’ll notify you once results are in.`;
     // 🧠 4. Handle cancel button
     if (data === "cancel_broadcast") {
       delete sessions[chatId];
-      return bot.sendMessage(chatId, "❌ Broadcast cancelled.");
+
+      const adminKeyboard = {
+        inline_keyboard: [
+          [
+            { text: "➕ Add Tip", callback_data: "add_tip" },
+            { text: "📈 Statistics", callback_data: "view_stats" },
+          ],
+          [
+            { text: "🧾 Manage Tips", callback_data: "manage_tips" },
+            { text: "👥 Manage Users", callback_data: "manage_users" },
+          ],
+          [{ text: "⌛ Awaiting Result", callback_data: "awaiting_Result" }],
+          [
+            { text: "💰 Add Balance", callback_data: "add_balance" },
+            { text: "📢 Broadcast Message", callback_data: "broadcast" },
+          ],
+          [{ text: "⬅️ Back to Main Menu", callback_data: "main_menu" }],
+        ],
+      };
+
+      return bot.editMessageText("🔧 *Admin Panel*\n\nChoose an option:", {
+        chat_id: chatId,
+        message_id: query.message.message_id,
+        parse_mode: "Markdown",
+        reply_markup: adminKeyboard,
+      });
     }
 
     if (data.startsWith("buy_")) {
@@ -1076,7 +1133,10 @@ We’ll notify you once results are in.`;
       );
 
       if (!game) {
-        await bot.sendMessage(chatId, "⚠️ Game not found.");
+        await bot.editMessageText("⚠️ Game not found.", {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+        });
         return await bot.answerCallbackQuery(query.id);
       }
 
@@ -1117,27 +1177,27 @@ We’ll notify you once results are in.`;
         }
 
         return `
-🏆 *Tip:* ${game.tipTitle}
+🏆 <b>Tip:</b> ${escapeHTML(game.tipTitle)}
 
-💵 *Price:* $${String(game.tipPrice)}
-📊 *Odds ratio:* ${game.oddRatio}
-🔥 *Confidence Level:* ${renderStars(game.confidenceLevel)}
-🟡 *${game.bettingSites}:* 
+💵 <b>Price:</b> $${escapeHTML(String(game.tipPrice))}
+📊 <b>Odds ratio:</b> ${escapeHTML(String(game.oddRatio))}
+🔥 <b>Confidence Level:</b> ${renderStars(game.confidenceLevel)}
+🟡 <b>${escapeHTML(String(game.bettingSites))}:</b> 
 
 ${progressText}
 
-ℹ Buy Game to unlock Content
+ℹ️ Buy Game to unlock Content
 
-⚠ *Remember:* Betting is done on betting sites; we only provide recommendations
+⚠️ <b>Remember:</b> Betting is done on betting sites; we only provide recommendations
 `;
       };
 
-      // Send initial message
-      const msg = await safeSend(
-        bot,
-        chatId,
+      // Edit current message with game details
+      const msg = await bot.editMessageText(
         buildDescription(endTime - Date.now()),
         {
+          chat_id: chatId,
+          message_id: query.message.message_id,
           reply_markup: {
             inline_keyboard: [
               [
@@ -1149,7 +1209,7 @@ ${progressText}
               [{ text: "⬅️ Back to Tips", callback_data: "tips" }],
             ],
           },
-          parse_mode: "MarkdownV2",
+          parse_mode: "HTML",
         }
       );
 
@@ -1173,7 +1233,7 @@ ${progressText}
         try {
           await bot.editMessageText(buildDescription(timeLeftMs), {
             chat_id: chatId,
-            message_id: msg.message_id,
+            message_id: query.message.message_id,
             reply_markup: {
               inline_keyboard: [
                 [
@@ -1185,7 +1245,7 @@ ${progressText}
                 [{ text: "⬅️ Back to Tips", callback_data: "tips" }],
               ],
             },
-            parse_mode: "MarkdownV2",
+            parse_mode: "HTML",
           });
         } catch (err) {
           // Ignore errors if message deleted
@@ -1206,9 +1266,17 @@ ${progressText}
     }
 
     if (data.startsWith("tip_"))
-      return handleViewTipDetails(chatId, data.split("_")[1]);
+      return handleTipDetails(
+        chatId,
+        data.split("_")[1],
+        query.message.message_id
+      );
     if (data.startsWith("toggle_"))
-      return handleToggleTip(chatId, data.split("_")[1]);
+      return handleToggleTip(
+        chatId,
+        data.split("_")[1],
+        query.message.message_id
+      );
     if (data.startsWith("notify_")) {
       const gameId = data.split("_")[1];
       await handleNotifyBuyers(chatId, gameId);
@@ -1396,13 +1464,26 @@ ${escapeHtml(progressText)}
             .join("\n")}`;
         }
 
-        await bot.sendMessage(query.message.chat.id, summary);
+        await bot.editMessageText(summary, {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
+            ],
+          },
+        });
       } catch (err) {
         console.error("Error in notifyAll handler:", err);
-        await bot.sendMessage(
-          query.message.chat.id,
-          "⚠️ Error notifying all users."
-        );
+        await bot.editMessageText("⚠️ Error notifying all users.", {
+          chat_id: query.message.chat.id,
+          message_id: query.message.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
+            ],
+          },
+        });
       }
     }
 
@@ -1575,11 +1656,16 @@ ${resultText}
     // balance show
     if (data.startsWith("balance_")) {
       const userId = data.split("_")[1];
-      return handleShowBalance(chatId, userId);
+      return handleShowBalance(chatId, userId, query.message.message_id);
     }
     if (data.startsWith("select_user_")) {
       const userId = data.replace("select_user_", "");
-      sessions[chatId] = { flow: "add_balance", step: 1, userId };
+      sessions[chatId] = {
+        flow: "add_balance",
+        step: 1,
+        userId,
+        messageId: query.message.message_id,
+      };
 
       try {
         const response = await axios.get(
@@ -1600,7 +1686,7 @@ ${resultText}
         const cancelButton = {
           reply_markup: {
             inline_keyboard: [
-              [{ text: "❌ Cancel", callback_data: "admin_panel" }],
+              [{ text: "❌ Cancel", callback_data: "cancel_add_balance" }],
             ],
           },
         };
@@ -1614,7 +1700,9 @@ ${resultText}
 💵 *Enter amount to add (in USD):*
 `;
 
-        return bot.sendMessage(chatId, message, {
+        return bot.editMessageText(message, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
           parse_mode: "Markdown",
           ...cancelButton,
         });
@@ -1709,6 +1797,80 @@ ${resultText}
       return bot.answerCallbackQuery(query.id); // silently ignore clicks
     }
 
+    // Handle cancel add balance - return to user list
+    if (data === "cancel_add_balance") {
+      // Clear session
+      if (sessions[chatId]) {
+        delete sessions[chatId];
+      }
+
+      try {
+        const res = await axios.get(`${BACKEND_URL}/api/auth/getUsers`);
+        const users = res.data.users || [];
+
+        if (!users.length) {
+          return bot.editMessageText("⚠️ No users found.", {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+          });
+        }
+
+        const currentPage = 1;
+        const usersPerPage = 10;
+        const totalPages = Math.ceil(users.length / usersPerPage);
+        const safePage = Math.max(1, Math.min(currentPage, totalPages));
+
+        const startIndex = (safePage - 1) * usersPerPage;
+        const endIndex = startIndex + usersPerPage;
+        const usersToShow = users.slice(startIndex, endIndex);
+
+        const inlineKeyboard = usersToShow.map((u) => [
+          {
+            text: `👤 ${u.userName || u.email} ($${u.availableBalance || 0})`,
+            callback_data: `select_user_${u._id}`,
+          },
+        ]);
+
+        const paginationRow = [];
+
+        if (safePage > 1) {
+          paginationRow.push({
+            text: "⬅️ Prev",
+            callback_data: `add_balance_page_${safePage - 1}`,
+          });
+        }
+
+        paginationRow.push({
+          text: `📝 Page ${safePage}/${totalPages}`,
+          callback_data: "noop",
+        });
+
+        if (safePage < totalPages) {
+          paginationRow.push({
+            text: "➡️ Next",
+            callback_data: `add_balance_page_${safePage + 1}`,
+          });
+        }
+
+        inlineKeyboard.push(paginationRow);
+        inlineKeyboard.push([
+          { text: "⬅️ Back to Main Menu", callback_data: "admin_panel" },
+        ]);
+
+        const messageText = `👥 *Select a user to add balance to:* (Page ${safePage}/${totalPages})`;
+
+        await bot.editMessageText(messageText, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: inlineKeyboard },
+        });
+      } catch (err) {
+        console.error("Error fetching users:", err.message);
+        await bot.sendMessage(chatId, "⚠️ Failed to fetch user list.");
+      }
+    }
+
     if (data.startsWith("confirm_add_balance_")) {
       const userId = data.replace("confirm_add_balance_", "");
       const s = sessions[chatId];
@@ -1740,13 +1902,29 @@ ${resultText}
           amount: s.amount,
         });
 
-        // Notify admin
-        await bot.sendMessage(
-          chatId,
+        // Notify admin with edited message
+        await bot.editMessageText(
           `✅ Successfully added *$${s.amount.toFixed(2)}* to *${
-            s.userData?.name || userObj.userName || "the user"
+            s.userData?.userName ||
+            s.userData?.name ||
+            userObj.userName ||
+            "the user"
           }*'s account.`,
-          { parse_mode: "Markdown" }
+          {
+            chat_id: chatId,
+            message_id: query.message.message_id,
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: "⬅️ Back to Admin Panel",
+                    callback_data: "admin_panel",
+                  },
+                ],
+              ],
+            },
+          }
         );
 
         // Notify user
@@ -1845,7 +2023,11 @@ Choose an action below:
           parse_mode: "Markdown",
         };
 
-        await bot.sendMessage(chatId, adminText, keyboard);
+        await bot.editMessageText(adminText, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          ...keyboard,
+        });
       } catch (err) {
         console.error(err);
         bot.sendMessage(chatId, "⚠️ Failed to load admin panel.");
@@ -1855,7 +2037,44 @@ Choose an action below:
       const chatId = query.message.chat.id;
       try {
         const ctx = await ensureUserContext(chatId, query.from);
-        await sendMainMenu(chatId, ctx.userId, query.from.first_name);
+        const res = await apiGet(`/api/auth/getUserById/${ctx.userId}`);
+        const user = res.data.user;
+        const balance = Number(user?.availableBalance || 0).toFixed(2);
+        const role = user?.role || "customer";
+
+        const caption = `🏆 *Welcome to the Sports Tips System*\n\n👋 Welcome ${user.userName}!\n\n🎯 Professional sports tips from the best experts\n\n💰 *Your balance:* $${balance}\n\n⚠ *Important:* Betting is done on betting sites\n\n🎲 We only provide professional recommendations\n\n💻 Click connect to website below to connect with our website`;
+
+        const buttons = [
+          [
+            { text: "💰 My Balance", callback_data: `balance_${user._id}` },
+            { text: "🏆 Available Tips", callback_data: "tips" },
+          ],
+          [{ text: "💳 Deposit Funds", callback_data: "deposit" }],
+          [
+            { text: "🧾 My Purchases", callback_data: "purchases" },
+            { text: "📈 All Tips History", callback_data: "history" },
+          ],
+          [
+            { text: "🆘 Support", callback_data: "support" },
+            {
+              text: "📣 Update Channel",
+              url: "https://t.me/Addictedgames2025",
+            },
+          ],
+        ];
+
+        if (role === "admin") {
+          buttons.push([
+            { text: "👤 Admin Panel", callback_data: "admin_panel" },
+          ]);
+        }
+
+        await bot.editMessageText(caption, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: buttons },
+        });
       } catch (err) {
         console.error("main_menu error:", err.message || err);
         await bot.sendMessage(
@@ -2010,7 +2229,7 @@ async function handleWaitingTips(chatId, messageId = null) {
   }
 }
 
-async function handleShowTips(chatId, from) {
+async function handleShowTips(chatId, from, messageId = null) {
   try {
     const ctx = await ensureUserContext(chatId, from);
     const userId = ctx.userId;
@@ -2048,17 +2267,21 @@ async function handleShowTips(chatId, from) {
     const activeGames = (activeRes.data || []).filter((g) => g.active);
 
     if (!activeGames.length) {
-      return bot.sendMessage(
-        chatId,
-        "⚠ No active tips available at the moment.",
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "⬅️ Back to Main Menu", callback_data: "main_menu" }],
-            ],
-          },
-        }
-      );
+      const noTipsText = "⚠ No active tips available at the moment.";
+      const reply_markup = {
+        inline_keyboard: [
+          [{ text: "⬅️ Back to Main Menu", callback_data: "main_menu" }],
+        ],
+      };
+      if (messageId) {
+        return bot.editMessageText(noTipsText, {
+          chat_id: chatId,
+          message_id: messageId,
+          reply_markup,
+        });
+      } else {
+        return bot.sendMessage(chatId, noTipsText, { reply_markup });
+      }
     }
 
     // 🧠 Step 3: Get user data to know which tips were bought
@@ -2100,14 +2323,30 @@ async function handleShowTips(chatId, from) {
       { text: "⬅️ Back to Main Menu", callback_data: "main_menu" },
     ]);
 
-    // 📨 Step 5: Send message
-    await bot.sendMessage(chatId, tipsMessage, {
+    // 📨 Step 5: Edit or send message
+    const opts = {
       parse_mode: "Markdown",
       reply_markup: { inline_keyboard: buttons },
-    });
+    };
+    if (messageId) {
+      await bot.editMessageText(tipsMessage, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...opts,
+      });
+    } else {
+      await bot.sendMessage(chatId, tipsMessage, opts);
+    }
   } catch (err) {
     console.error("handleShowTips error:", err.message || err);
-    await bot.sendMessage(chatId, "❌ Failed to fetch tips.");
+    if (messageId) {
+      await bot.editMessageText("❌ Failed to fetch tips.", {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+    } else {
+      await bot.sendMessage(chatId, "❌ Failed to fetch tips.");
+    }
   }
 }
 
@@ -2166,7 +2405,7 @@ The game expired and was automatically deactivated.
 
 // 🕒 Run every 1 minute
 setInterval(() => autoDeactivateExpiredGames(bot), 60 * 1000);
-async function handlePurchases(chatId, from) {
+async function handlePurchases(chatId, from, messageId = null) {
   try {
     const ctx = await ensureUserContext(chatId, from);
     const userId = ctx.userId;
@@ -2189,10 +2428,19 @@ async function handlePurchases(chatId, from) {
           ],
         },
       };
-      return bot.sendMessage(chatId, msg, {
-        parse_mode: "HTML",
-        ...kb,
-      });
+      if (messageId) {
+        return bot.editMessageText(msg, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+          ...kb,
+        });
+      } else {
+        return bot.sendMessage(chatId, msg, {
+          parse_mode: "HTML",
+          ...kb,
+        });
+      }
     }
 
     // 🧾 Header
@@ -2231,20 +2479,40 @@ async function handlePurchases(chatId, from) {
       },
     };
 
-    await bot.sendMessage(chatId, message, {
-      parse_mode: "HTML",
-      ...keyboard,
-    });
+    if (messageId) {
+      await bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+    } else {
+      await bot.sendMessage(chatId, message, {
+        parse_mode: "HTML",
+        ...keyboard,
+      });
+    }
   } catch (err) {
     console.error(
       "handlePurchases error:",
       err?.response?.data || err.message || err
     );
-    await bot.sendMessage(
-      chatId,
-      "⚠️ Failed to load your purchases. Please try again later.",
-      { parse_mode: "HTML" }
-    );
+    if (messageId) {
+      await bot.editMessageText(
+        "⚠️ Failed to load your purchases. Please try again later.",
+        {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode: "HTML",
+        }
+      );
+    } else {
+      await bot.sendMessage(
+        chatId,
+        "⚠️ Failed to load your purchases. Please try again later.",
+        { parse_mode: "HTML" }
+      );
+    }
   }
 }
 async function handleAllTipsHistory(
@@ -2463,7 +2731,7 @@ ${escapeHTML(selected.contentAfterPurchase || "No details provided.")}
   }
 }
 
-async function handleViewStats(chatId) {
+async function handleViewStats(chatId, messageId = null) {
   try {
     const [gameStatsRes, userRes] = await Promise.all([
       axios.get(`${BACKEND_URL}/api/games/stats`),
@@ -2508,30 +2776,60 @@ async function handleViewStats(chatId) {
 - Total system balance: $${totalSystemBalance.toFixed(2)}
 `;
 
-    await bot.sendMessage(chatId, statsText, {
+    const options = {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
           [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
         ],
       },
-    });
+    };
+
+    if (messageId) {
+      await bot.editMessageText(statsText, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...options,
+      });
+    } else {
+      await bot.sendMessage(chatId, statsText, options);
+    }
   } catch (err) {
     console.error("⚠️ Error fetching statistics:", err.message);
-    bot.sendMessage(chatId, "⚠️ Failed to fetch detailed statistics.");
+    if (messageId) {
+      await bot.editMessageText("⚠️ Failed to fetch detailed statistics.", {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+    } else {
+      bot.sendMessage(chatId, "⚠️ Failed to fetch detailed statistics.");
+    }
   }
 }
 
-async function handleToggleTip(chatId, gameId) {
+async function handleToggleTip(chatId, gameId, messageId = null) {
   try {
     const res = await apiPut(`/api/games/${gameId}/toggle-active`);
-    await bot.sendMessage(chatId, `✅ ${res.data.message || "Tip toggled"}`);
+    const message = `✅ ${res.data.message || "Tip toggled"}`;
+    if (messageId) {
+      await bot.editMessageText(message, {
+        chat_id: chatId,
+        message_id: messageId,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "⬅️ Back to Tip", callback_data: `tip_${gameId}` }],
+          ],
+        },
+      });
+    } else {
+      await bot.sendMessage(chatId, message);
+    }
   } catch (err) {
     console.error("handleToggleTip error:", err.message || err);
   }
 }
 
-async function handleShowBalance(chatId, userId) {
+async function handleShowBalance(chatId, userId, messageId = null) {
   try {
     const res = await apiGet(`/api/auth/getUserById/${userId}`);
     const user = res.data.user;
@@ -2545,10 +2843,26 @@ async function handleShowBalance(chatId, userId) {
         ],
       },
     };
-    await bot.sendMessage(chatId, `💰 Balance: $${balance}`, keyboard);
+    const balanceText = `💰 Balance: $${balance}`;
+    if (messageId) {
+      await bot.editMessageText(balanceText, {
+        chat_id: chatId,
+        message_id: messageId,
+        ...keyboard,
+      });
+    } else {
+      await bot.sendMessage(chatId, balanceText, keyboard);
+    }
   } catch (err) {
     console.error("handleShowBalance error:", err.message || err);
-    await bot.sendMessage(chatId, "❌ Failed to fetch balance.");
+    if (messageId) {
+      await bot.editMessageText("❌ Failed to fetch balance.", {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+    } else {
+      await bot.sendMessage(chatId, "❌ Failed to fetch balance.");
+    }
   }
 }
 
@@ -2893,16 +3207,21 @@ Click below to complete payment:
           s.amount = amount;
           s.step = 3;
 
-          const newBalance = (Number(s.userData.balance || 0) + amount).toFixed(
-            2
-          );
+          const newBalance = (
+            Number(s.userData.availableBalance || s.userData.balance || 0) +
+            amount
+          ).toFixed(2);
 
           const confirmText = `
 ⚠️ *Confirm Balance Addition*
 
-👤 *User:* ${s.userData.name || "Unknown"} (@${s.userData.username || "N/A"})
+👤 *User:* ${s.userData.userName || s.userData.name || "Unknown"} (@${
+            s.userData.userName || s.userData.username || "N/A"
+          })
 💰 *Amount to add:* $${amount.toFixed(2)}
-💳 *Current balance:* $${Number(s.userData.balance || 0).toFixed(2)}
+💳 *Current balance:* $${Number(
+            s.userData.availableBalance || s.userData.balance || 0
+          ).toFixed(2)}
 📄 *Balance after addition:* $${newBalance}
 
 ❓ Are you sure you want to add this balance?
@@ -2916,13 +3235,15 @@ Click below to complete payment:
                     text: "✅ Confirm",
                     callback_data: `confirm_add_balance_${s.userId}`,
                   },
-                  { text: "❌ Cancel", callback_data: "admin_panel" },
+                  { text: "❌ Cancel", callback_data: "cancel_add_balance" },
                 ],
               ],
             },
           };
 
-          return bot.sendMessage(chatId, confirmText, {
+          return bot.editMessageText(confirmText, {
+            chat_id: chatId,
+            message_id: s.messageId,
             parse_mode: "Markdown",
             ...confirmKeyboard,
           });
@@ -3268,7 +3589,7 @@ bot.on("callback_query", async (query) => {
   }
 });
 
-async function handleTipDetails(chatId, gameId) {
+async function handleTipDetails(chatId, gameId, messageId = null) {
   try {
     const res = await apiGet(`/api/games/allGame`);
     const games = res.data || [];
@@ -3276,6 +3597,12 @@ async function handleTipDetails(chatId, gameId) {
 
     if (!selected) {
       console.warn(`Game not found for ID: ${gameId}`);
+      if (messageId) {
+        return bot.editMessageText("⚠️ Game not found.", {
+          chat_id: chatId,
+          message_id: messageId,
+        });
+      }
       return bot.sendMessage(chatId, "⚠️ Game not found.");
     }
 
@@ -3322,13 +3649,9 @@ ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
         ],
         [
           {
-            text: "⏰Extend time",
+            text: "⏰ Extend time",
             callback_data: `updateTime_${selected._id}`,
           },
-          // {
-          //   text: "🏆Notify Buyers",
-          //   callback_data: `notifyBuyers_${selected._id}`,
-          // },
         ],
         [
           {
@@ -3336,25 +3659,27 @@ ${escapeMarkdown(selected.contentAfterPurchase || "No description provided.")}
             callback_data: `update_${selected._id}`,
           },
         ],
-        [{ text: "⬅️ Back to Tips", callback_data: "manage_tips" }],
+        [{ text: "⬅️ Back to Awaiting", callback_data: "awaiting_Result" }],
       ],
     };
 
-    if (selected.image) {
-      await bot.sendPhoto(chatId, selected.image, {
-        caption: details,
-        parse_mode: "Markdown",
-        reply_markup: inlineKeyboard,
-      });
-    } else {
-      await bot.sendMessage(chatId, details, {
-        parse_mode: "Markdown",
-        reply_markup: inlineKeyboard,
-      });
-    }
+    // Always edit the current message for a single-thread UX
+    await bot.editMessageText(details, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: "Markdown",
+      reply_markup: inlineKeyboard,
+    });
   } catch (err) {
     console.error("handleTipDetails error:", err.message || err);
-    await bot.sendMessage(chatId, "⚠️ Error fetching tip details.");
+    if (messageId) {
+      await bot.editMessageText("⚠️ Error fetching tip details.", {
+        chat_id: chatId,
+        message_id: messageId,
+      });
+    } else {
+      await bot.sendMessage(chatId, "⚠️ Error fetching tip details.");
+    }
   }
 }
 const userPagination = {};
@@ -3407,7 +3732,11 @@ async function handleManageUsers(chatId, page = 1, messageId = null) {
       },
     ];
 
-    const inlineKeyboard = [...userButtons, paginationRow];
+    const inlineKeyboard = [
+      ...userButtons,
+      paginationRow,
+      [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
+    ];
 
     const summary = `👥 *Users:* ${users.length}\n📄 *Page:* ${currentPage}/${totalPages}`;
 
@@ -3453,9 +3782,42 @@ bot.on("callback_query", async (query) => {
     // Handle user selection
     if (data.startsWith("user_")) {
       const userId = data.split("_")[1];
-      await bot.sendMessage(chatId, `ℹ️ Selected user ID: *${userId}*`, {
-        parse_mode: "Markdown",
-      });
+      const res = await apiGet("/api/auth/getUsers");
+      const user = (res.data.users || []).find(
+        (u) => String(u._id) === String(userId)
+      );
+      if (!user) {
+        return bot.editMessageText("User not found.", {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+        });
+      }
+
+      const status = user.active ? "🟢 Active" : "🔴 Blocked";
+      const options = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              {
+                text: user.active ? "🚫 Block" : "✅ Unblock",
+                callback_data: `toggleUser_${userId}`,
+              },
+            ],
+            [{ text: "🗑 Delete User", callback_data: `deleteUser_${userId}` }],
+            [{ text: "⬅️ Back to Users", callback_data: "manage_users" }],
+          ],
+        },
+      };
+      await bot.editMessageText(
+        `👤 ${user.userName}\n📧 ${user.email}\nBalance: $${
+          user.availableBalance || 0
+        }\nStatus: ${status}`,
+        {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          ...options,
+        }
+      );
       return;
     }
   } catch (err) {
@@ -3472,54 +3834,40 @@ bot.on("callback_query", async (query) => {
   const data = query.data;
   const chatId = query.message.chat.id;
   try {
-    if (data.startsWith("user_")) {
-      const userId = data.split("_")[1];
-      const res = await apiGet("/api/auth/getUsers");
-      const user = (res.data.users || []).find(
-        (u) => String(u._id) === String(userId)
-      );
-      if (!user) return bot.sendMessage(chatId, "User not found.");
-
-      const status = user.active ? "🟢 Active" : "🔴 Blocked";
-      const options = {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: user.active ? "🚫 Block" : "✅ Unblock",
-                callback_data: `toggleUser_${userId}`,
-              },
-            ],
-            [{ text: "🗑 Delete User", callback_data: `deleteUser_${userId}` }],
-            [{ text: "⬅️ Back to Admin", callback_data: "admin_panel" }],
-          ],
-        },
-      };
-      await bot.sendMessage(
-        chatId,
-        `👤 ${user.userName}\n📧 ${user.email}\nBalance: $${
-          user.availableBalance || 0
-        }\nStatus: ${status}`,
-        options
-      );
-    }
-
     if (data.startsWith("toggleUser_")) {
       const userId = data.split("_")[1];
       const res = await apiGet("/api/auth/getUsers");
       const user = (res.data.users || []).find(
         (u) => String(u._id) === String(userId)
       );
-      if (!user) return bot.sendMessage(chatId, "User not found.");
+      if (!user) {
+        return bot.editMessageText("User not found.", {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+        });
+      }
       if (user.active) {
         await apiPut(`/api/auth/deactivateUser/${userId}`);
-        await bot.sendMessage(chatId, `🚫 ${user.userName} has been blocked.`);
+        await bot.editMessageText(`🚫 ${user.userName} has been blocked.`, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Back to Users", callback_data: "manage_users" }],
+            ],
+          },
+        });
       } else {
         await apiPut(`/api/auth/reactivateUser/${userId}`);
-        await bot.sendMessage(
-          chatId,
-          `✅ ${user.userName} has been unblocked.`
-        );
+        await bot.editMessageText(`✅ ${user.userName} has been unblocked.`, {
+          chat_id: chatId,
+          message_id: query.message.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "⬅️ Back to Users", callback_data: "manage_users" }],
+            ],
+          },
+        });
       }
     }
 
